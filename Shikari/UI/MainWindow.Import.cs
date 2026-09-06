@@ -36,6 +36,7 @@ public sealed partial class MainWindow
 
     private void DrawImportTab(PlanDocument plan)
     {
+        DrawWtfDigImport();
         DrawPlanFileImport();
 
         ImGui.Spacing();
