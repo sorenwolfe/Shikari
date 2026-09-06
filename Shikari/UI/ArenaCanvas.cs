@@ -28,7 +28,7 @@ public enum CanvasTool
 /// Everything is stored in normalised 0-1 coordinates, so the same plan renders identically in a
 /// small docked window and a maximised one.
 /// </summary>
-public sealed class ArenaCanvas
+public sealed partial class ArenaCanvas
 {
     private const string CanvasId = "##shikari-arena";
 
@@ -113,7 +113,7 @@ public sealed class ArenaCanvas
     public float SettleTolerance { get; set; } = 0.03f;
 
     /// <summary>True once the local player is standing where the plan wants them.</summary>
-    public bool Settled => SettleDistance >= 0f && SettleDistance <= SettleTolerance;
+    public bool Settled => MiniPresentation ? miniSettled : SettleDistance >= 0f && SettleDistance <= SettleTolerance;
 
     /// <summary>Gold. The one colour on the board that only ever means "this is your spot".</summary>
     public const uint TargetGold = 0xFF4FC8FF;
@@ -140,7 +140,7 @@ public sealed class ArenaCanvas
     {
         var changed = false;
 
-        var floor = 120f * UiHelpers.Scale;
+        var floor = (MiniPresentation ? 96f : 120f) * UiHelpers.Scale;
         if (available.X < floor || available.Y < floor)
         {
             ImGui.TextDisabled("Not enough room to draw the arena.");
@@ -173,15 +173,25 @@ public sealed class ArenaCanvas
         var drawList = ImGui.GetWindowDrawList();
         drawList.PushClipRect(viewOrigin, viewOrigin + canvasSize, true);
 
+        miniLabels.Clear();
         DrawBackdrop(drawList, slide, boardSize);
         DrawArenaBackground(drawList, plan.Arena, boardSize);
 
-        foreach (var item in slide.Items.OrderBy(i => i.Layer).ThenBy(i => (int)i.Kind))
+        var ordered = MiniPresentation
+            ? slide.Items.OrderBy(MiniMapLayout.Layer).ThenBy(i => i.Layer)
+            : slide.Items.OrderBy(i => i.Layer).ThenBy(i => (int)i.Kind);
+        foreach (var item in ordered)
             DrawItem(drawList, plan, slide, item);
 
         dim = 1f;
 
-        DrawLivePlayers(drawList, plan, slide);
+        if (MiniPresentation)
+        {
+            DrawMiniLivePlayers(drawList, plan, slide);
+            DrawMiniDestination(drawList, slide);
+            DrawMiniLabels(drawList);
+        }
+        else DrawLivePlayers(drawList, plan, slide);
 
         drawList.PopClipRect();
 
@@ -423,6 +433,7 @@ public sealed class ArenaCanvas
     private void MeasureSettle(Slide slide)
     {
         SettleDistance = -1f;
+        if (MiniPresentation) { MeasureMiniSettle(slide); return; }
 
         var players = LivePlayers;
         if (players == null || HighlightSlot < 0)
@@ -533,8 +544,8 @@ public sealed class ArenaCanvas
             {
                 var x = min.X + (step * i);
                 var y = min.Y + (step * i);
-                drawList.AddLine(new Vector2(x, min.Y), new Vector2(x, max.Y), arena.GridColor, 1f);
-                drawList.AddLine(new Vector2(min.X, y), new Vector2(max.X, y), arena.GridColor, 1f);
+                drawList.AddLine(new Vector2(x, min.Y), new Vector2(x, max.Y), MiniPresentation ? 0x16FFFFFF : arena.GridColor, 1f);
+                drawList.AddLine(new Vector2(min.X, y), new Vector2(max.X, y), MiniPresentation ? 0x16FFFFFF : arena.GridColor, 1f);
             }
         }
 
@@ -594,6 +605,7 @@ public sealed class ArenaCanvas
 
             case CanvasItemKind.EnemyToken:
             {
+                if (MiniPresentation) { DrawMiniEnemy(drawList, item, centre); break; }
                 var r = Len(item.Radius);
                 drawList.AddCircleFilled(centre, r, UiHelpers.WithAlpha(item.Color, 0.85f), 32);
                 drawList.AddCircle(centre, r, 0xFF101010, 32, 2f);
@@ -636,6 +648,7 @@ public sealed class ArenaCanvas
 
     private void DrawPlayerToken(ImDrawListPtr drawList, PlanDocument plan, CanvasItem item, Vector2 centre)
     {
+        if (MiniPresentation) { DrawMiniToken(drawList, plan, item, centre); return; }
         var radius = Len(item.Radius);
 
         var colour = item.Color;
@@ -715,7 +728,8 @@ public sealed class ArenaCanvas
     {
         var text = string.IsNullOrEmpty(item.Text) ? "A" : item.Text;
         var colour = WaymarkColor(text);
-        var radius = Len(item.Radius * 0.8f);
+        var radius = MiniPresentation ? MathF.Max(9f * UiHelpers.Scale, Len(item.Radius * 0.8f)) : Len(item.Radius * 0.8f);
+        if (MiniPresentation) drawList.AddCircleFilled(centre, radius + 2 * UiHelpers.Scale, 0xFF171310, 24);
 
         if (text is "1" or "2" or "3" or "4")
         {
@@ -745,7 +759,7 @@ public sealed class ArenaCanvas
     private void DrawZone(ImDrawListPtr drawList, CanvasItem item)
     {
         var centre = ToScreen(item.Position);
-        var fill = item.Color;
+        var fill = MiniPresentation ? MiniMapLayout.HazardFill(item.Color) : item.Color;
         var edge = UiHelpers.WithAlpha(item.Color, 0.9f);
 
         switch (item.Zone)

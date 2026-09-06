@@ -420,7 +420,7 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         var onlyMe = config.MiniPlanOnlyMe;
-        if (ImGui.Checkbox("Just my job", ref onlyMe))
+        if (ImGui.Checkbox("Focus on my position", ref onlyMe))
         {
             config.MiniPlanOnlyMe = onlyMe;
             Plugin.SaveConfig();
@@ -428,12 +428,12 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.SameLine();
         UiHelpers.HelpMarker(
-            "On by default. Fades the other seven players and their movement so your own line " +
-            "is the one you see first. Nothing is hidden — you can still check on the person " +
-            "next to you, and everything describing the mechanic itself stays fully lit.");
+            "Subdues other players' live dots and their annotated movement. Planned seat labels " +
+            "stay readable so you can still check the party's assignments. " +
+            "The cyan crosshair marks your destination; the white diamond is your live position.");
 
         var highlight = config.MiniPlanHighlightMe;
-        if (ImGui.Checkbox("Ring my own marker", ref highlight))
+        if (ImGui.Checkbox("Highlight my destination", ref highlight))
         {
             config.MiniPlanHighlightMe = highlight;
             Plugin.SaveConfig();

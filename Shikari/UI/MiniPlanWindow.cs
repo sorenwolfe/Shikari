@@ -40,7 +40,7 @@ public sealed class MiniPlanWindow : Window, IDisposable
         ImGuiWindowFlags.NoScrollbar |
         ImGuiWindowFlags.NoScrollWithMouse;
 
-    private readonly ArenaCanvas canvas = new();
+    private readonly ArenaCanvas canvas = new() { MiniPresentation = true };
     private readonly ZoneClassifier zone = new();
 
     private bool ignoringMouse = true;
@@ -52,6 +52,9 @@ public sealed class MiniPlanWindow : Window, IDisposable
     private bool resizePendingSave;
     private float resizeGrab;
     private string noteText = string.Empty;
+    private string miniStatus = string.Empty;
+    private string miniHint = string.Empty;
+    private float statusHeight;
     private float noteHeight;
     private ThemeScope theme;
 
@@ -133,12 +136,25 @@ public sealed class MiniPlanWindow : Window, IDisposable
         var activeSlide = activePlan != null && activePlan.Slides.Count > 0
             ? activePlan.Slides[Math.Clamp(Plugin.Main.SlideIndex, 0, activePlan.Slides.Count - 1)] : null;
         var aligned = activePlan != null && Plugin.Tracker.TryAlign(activePlan, activeSlide, out _);
-        var status = Plugin.Config.ShowLivePositions
-            ? (aligned ? "LIVE / ALIGNED" : "LIVE / ALIGNMENT UNAVAILABLE") : "PLAN / LIVE POSITIONS OFF";
-        var notes = CurrentNotes();
-        noteText = status + (notes.Length > 0 ? "\n" + notes : string.Empty);
-        noteHeight = MeasureNotes(noteText, side);
-
+        var slot = Plugin.Roster.ResolveLocalSlot(activePlan);
+        var target = activeSlide != null ? MiniMapLayout.Target(activeSlide, slot) : null;
+        miniStatus = Plugin.Config.ShowLivePositions && aligned ? "LIVE TRACKING" : "PLAN VIEW";
+        if (!Plugin.Config.MiniPlanHighlightMe)
+            miniHint = "Personal highlight is off in Settings.";
+        else if (slot < 0)
+            miniHint = "Choose your seat in Plan > Roster.";
+        else if (target == null)
+            miniHint = "No single destination for your seat on this slide.";
+        else if (!Plugin.Config.ShowLivePositions)
+            miniHint = "YOUR SPOT = planned destination. Live positions are off.";
+        else if (!aligned)
+            miniHint = "YOUR SPOT = planned destination. " + Plugin.Tracker.Status;
+        else
+            miniHint = "White diamond = you. Cyan ring = your spot.";
+        noteText = CurrentNotes();
+        statusHeight = ImGui.GetTextLineHeight() * 2 + 18 * UiHelpers.Scale;
+        statusHeight += MathF.Min(ImGui.CalcTextSize(miniHint, false, side - 20 * UiHelpers.Scale).Y, ImGui.GetTextLineHeight() * 3);
+        noteHeight = statusHeight + MeasureNotes(noteText, side);
         ImGui.SetNextWindowSize(new Vector2(side, side + noteHeight), ImGuiCond.Always);
 
         // Only steer the position while the mouse is off it. Otherwise a drag fights the anchor.
@@ -276,7 +292,7 @@ public sealed class MiniPlanWindow : Window, IDisposable
         if (text.Length == 0)
             return 0f;
 
-        var pad = 6f * UiHelpers.Scale;
+        var pad = 10f * UiHelpers.Scale;
         var lines = Math.Clamp(Plugin.Config.MiniPlanNoteLines, 1, 12);
         var wrapped = ImGui.CalcTextSize(text, false, width - (pad * 2)).Y;
 
@@ -285,35 +301,32 @@ public sealed class MiniPlanWindow : Window, IDisposable
 
     private void DrawNotes(ImDrawListPtr drawList, Vector2 min, Vector2 size, Vector2 board)
     {
-        if (noteHeight <= 0f || noteText.Length == 0)
-            return;
-
-        var pad = 6f * UiHelpers.Scale;
+        var pad = 10f * UiHelpers.Scale;
         var top = min.Y + board.Y;
-
-        drawList.AddLine(
-            new Vector2(min.X + pad, top),
-            new Vector2(min.X + size.X - pad, top),
-            Palette.Line(0.10f),
-            1f);
-
-        // The height is capped, so a long note has to be cut off rather than run out of the
-        // bottom of the window and over the hotbars.
-        drawList.PushClipRect(
-            new Vector2(min.X + pad, top),
-            new Vector2(min.X + size.X - pad, min.Y + size.Y - (pad * 0.5f)),
-            true);
-
-        ImGui.SetCursorPos(new Vector2(pad, board.Y + pad));
+        // The footer needs its own solid surface; game scenery should not compete with instructions.
+        drawList.AddRectFilled(new Vector2(min.X, top), min + size, Palette.Pack(0x101014, 0.97f), 6 * UiHelpers.Scale);
+        drawList.AddLine(new Vector2(min.X + pad, top), new Vector2(min.X + size.X - pad, top), Palette.Line(0.18f), 1f);
+        drawList.PushClipRect(new Vector2(min.X + pad, top), new Vector2(min.X + size.X - pad, top + statusHeight), true);
+        ImGui.SetCursorPos(new Vector2(pad, board.Y + 7 * UiHelpers.Scale));
+        var status = canvas.Settled ? "IN POSITION" : miniStatus;
+        ImGui.TextColored(Palette.Vec(canvas.Settled ? 0x80EDA2u : 0x70DEFFu), status);
         ImGui.PushTextWrapPos(size.X - pad);
-        ImGui.PushStyleColor(ImGuiCol.Text, Palette.Vec(Palette.TextMuted));
-        ImGui.TextUnformatted(noteText);
-        ImGui.PopStyleColor();
+        ImGui.TextUnformatted(canvas.Settled ? "Green ring = in position." : miniHint);
         ImGui.PopTextWrapPos();
-
+        if (noteText.Length > 0)
+        {
+            var notesTop = top + statusHeight;
+            drawList.PopClipRect();
+            drawList.PushClipRect(new Vector2(min.X + pad, notesTop), min + size - new Vector2(pad, 4 * UiHelpers.Scale), true);
+            ImGui.SetCursorPos(new Vector2(pad, board.Y + statusHeight));
+            ImGui.PushTextWrapPos(size.X - pad);
+            ImGui.PushStyleColor(ImGuiCol.Text, Palette.Vec(Palette.Text));
+            ImGui.TextUnformatted(noteText);
+            ImGui.PopStyleColor();
+            ImGui.PopTextWrapPos();
+        }
         drawList.PopClipRect();
     }
-
     /// <summary>
     /// Shown only when the window is taking the mouse — that is, out of combat. The close button
     /// and the drag are hit-tested by hand rather than left to ImGui: this window has no title
