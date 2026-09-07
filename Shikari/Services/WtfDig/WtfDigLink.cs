@@ -23,6 +23,8 @@ public sealed class WtfDigLink
             var parts = pair.Split('=', 2);
             result.Options[Uri.UnescapeDataString(parts[0].Replace('+', ' '))] = parts.Length == 2 ? Uri.UnescapeDataString(parts[1].Replace('+', ' ')) : "";
         }
+        if (!result.Options.ContainsKey("strat") && !result.Options.ContainsKey("stratName") && uri.Fragment.Length > 1)
+            result.Options["strat"] = Uri.UnescapeDataString(uri.Fragment[1..]);
         return result;
     }
 }

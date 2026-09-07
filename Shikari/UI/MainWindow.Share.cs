@@ -15,7 +15,7 @@ public sealed partial class MainWindow
     {
         ImGui.TextWrapped(
             "A plan travels as one line of text. Copy it, drop it in your static's Discord, and " +
-            "everyone pastes it back here. Nothing leaves your machine and there is no server involved.");
+            "everyone brings it in through Plan → Import.");
 
         ImGui.Spacing();
         ImGui.TextDisabled("Export");
@@ -58,40 +58,6 @@ public sealed partial class MainWindow
                 UiHelpers.Pack(new Vector4(1f, 0.78f, 0.35f, 1f)),
                 $"This plan makes a ~{estimate:N0} character code, past Discord's 2,000 limit — send it as a file instead.");
         }
-
-        ImGui.Spacing();
-        ImGui.TextDisabled("Import");
-        ImGui.Separator();
-
-        ImGui.TextUnformatted("Paste a code below:");
-        ImGui.TextDisabled("Imported AoEs start in danger orange; colours can be edited afterwards.");
-        UiHelpers.InputMultiline("##import-code", ref importBuffer, new Vector2(-1, 90 * UiHelpers.Scale), 1024 * 512);
-
-        if (ImGui.Button("Paste from clipboard", Vector2.Zero))
-        {
-            try
-            {
-                importBuffer = ImGui.GetClipboardText() ?? string.Empty;
-            }
-            catch (Exception ex)
-            {
-                importStatus = "Could not read the clipboard: " + ex.Message;
-                importStatusIsError = true;
-            }
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Import as a new plan", Vector2.Zero))
-            DoImport(replaceExisting: false);
-
-        ImGui.SameLine();
-        if (ImGui.Button("Import and overwrite", Vector2.Zero))
-            DoImport(replaceExisting: true);
-
-        ImGui.SameLine();
-        UiHelpers.HelpMarker(
-            "\"Overwrite\" replaces the stored copy of the plan that shares this code's id — that is " +
-            "how you take an updated version from your raid lead without ending up with six copies.");
 
         if (!string.IsNullOrEmpty(importStatus))
         {

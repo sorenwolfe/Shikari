@@ -15,6 +15,10 @@ namespace Shikari.UI;
 
 public sealed partial class MainWindow
 {
+    private string unifiedImportInput = string.Empty;
+    private ImportSource importSource = ImportSource.Parse("");
+    private bool replaceSharedPlan;
+    private bool ImportBusy => importBusy || WtfBusy;
     private string reportInput = string.Empty;
     private string importStatusLine = string.Empty;
     private bool importFailed;
@@ -23,79 +27,124 @@ public sealed partial class MainWindow
     private List<LogFight>? fights;
     private int selectedFight = -1;
     private LogFightData? loadedFight;
-    private bool importBusy;
+    private Task<Action>? importLoad;
+    private bool importBusy => importLoad != null;
 
     private readonly ImportOptions importOptions = new();
     private bool showCredentials;
 
     private string planLink = string.Empty;
-    private bool planBusy;
     private string planFilePath = string.Empty;
     private string planFileStatus = string.Empty;
     private bool planFileFailed;
 
     private void DrawImportTab(PlanDocument plan)
     {
-        DrawWtfDigImport();
+        using (Plugin.Fonts.PushHeading()) ImGui.TextUnformatted("Bring in a strategy");
+        ImGui.TextDisabled("Paste a link or share code. Shikari will handle the source.");
+        ImGui.Spacing();
+        ImGui.BeginDisabled(ImportBusy);
+        ImGui.SetNextItemWidth(-112 * UiHelpers.Scale);
+        if (UiHelpers.InputTextHint("##unified-import", "WTFDIG, raidplan.io, FF Logs, or a Shikari share code…",
+                ref unifiedImportInput, ImportSource.MaxLength))
+            ResetImportPreview();
+        var submit = ImGui.IsItemFocused() && ImGui.IsKeyPressed(ImGuiKey.Enter, false);
+        ImGui.SameLine();
+        ImGui.BeginDisabled(importSource.Kind == ImportKind.Unknown || Plugin.Encounter.InCombat);
+        var clicked = ImGui.Button(ImportBusy ? "Loading…" : "Import", new Vector2(-1, 0));
+        ImGui.EndDisabled();
+        if ((clicked || submit) && !ImportBusy && !Plugin.Encounter.InCombat)
+            StartUnifiedImport();
+        ImGui.EndDisabled();
+        ImGui.TextWrapped(importSource.Hint);
+        if (Plugin.Encounter.InCombat) ImGui.TextDisabled("Import after the pull finishes.");
+        ImGui.Spacing();
+        switch (importSource.Kind)
+        {
+            case ImportKind.WtfDig:
+                DrawWtfDigImport();
+                break;
+            case ImportKind.FfLogs:
+                DrawFfLogsImport(plan);
+                break;
+            case ImportKind.ShareCode:
+                ImGui.BeginDisabled(ImportBusy || Plugin.Encounter.InCombat);
+                ImGui.Checkbox("Update the saved plan with the same ID", ref replaceSharedPlan);
+                ImGui.EndDisabled();
+                ImGui.SameLine();
+                UiHelpers.HelpMarker("Leave this off to import a new copy. Turn it on to replace the matching saved plan with your raid lead's update.");
+                if (!string.IsNullOrEmpty(importStatus))
+                {
+                    ImGui.PushStyleColor(ImGuiCol.Text, Palette.Vec(importStatusIsError ? Palette.Danger : Palette.Good));
+                    ImGui.TextWrapped(importStatus);
+                    ImGui.PopStyleColor();
+                }
+                break;
+            case ImportKind.RaidPlan:
+                if (importBusy) ImGui.TextDisabled("Fetching the editable plan…");
+                break;
+        }
+        DrawImportStatus();
         DrawPlanFileImport();
+    }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        ImGui.TextDisabled("From FF Logs");
-        ImGui.Spacing();
+    private void ResetImportPreview()
+    {
+        importSource = ImportSource.Parse(unifiedImportInput);
+        fights = null;
+        selectedFight = -1;
+        loadedFight = null;
+        wtfGuide = null;
+        wtfPreview = null;
+        wtfStatus = importStatusLine = importDetail = planFileStatus = importStatus = string.Empty;
+        importFailed = planFileFailed = importStatusIsError = wtfError = false;
+        replaceSharedPlan = false;
+    }
 
-        ImGui.TextWrapped(
-            "Paste an FF Logs link and pull the fight's timeline straight in, along with the " +
-            "cooldowns each player pressed. Seats are matched to log players by job.");
+    private void StartUnifiedImport()
+    {
+        if (ImportBusy || Plugin.Encounter.InCombat) return;
+        switch (importSource.Kind)
+        {
+            case ImportKind.WtfDig:
+                StartWtfGuide(importSource.Value);
+                break;
+            case ImportKind.RaidPlan:
+                planLink = importSource.Value;
+                ImportFromLink();
+                break;
+            case ImportKind.FfLogs:
+                reportInput = importSource.Value;
+                if (HasCredentials()) LoadFights();
+                else showCredentials = true;
+                break;
+            case ImportKind.ShareCode:
+                importBuffer = importSource.Value;
+                DoImport(replaceSharedPlan);
+                break;
+        }
+    }
 
-        ImGui.Spacing();
-
+    private void DrawFfLogsImport(PlanDocument plan)
+    {
+        ImGui.BeginDisabled(importBusy);
         if (!HasCredentials())
         {
-            ImGui.Separator();
             FfLogsCredentialsPanel.Draw(showInstructions: true);
+            ImGui.EndDisabled();
             return;
         }
-
-        // Set up and working: one line, with a way back to the boxes.
         FfLogsCredentialsPanel.DrawSummary();
         ImGui.SameLine();
-        if (ImGui.SmallButton(showCredentials ? "Hide" : "Change"))
-            showCredentials = !showCredentials;
-
+        if (ImGui.SmallButton(showCredentials ? "Hide" : "Change")) showCredentials = !showCredentials;
         if (showCredentials)
         {
             ImGui.Spacing();
             FfLogsCredentialsPanel.Draw(showInstructions: false);
-            ImGui.Separator();
         }
-
-        ImGui.Spacing();
-
-        if (string.IsNullOrEmpty(reportInput) && !string.IsNullOrEmpty(Plugin.Config.LastReportUrl))
-            reportInput = Plugin.Config.LastReportUrl;
-
-        ImGui.SetNextItemWidth(-120 * UiHelpers.Scale);
-        UiHelpers.InputTextHint("##report", "https://www.fflogs.com/reports/…", ref reportInput, 256);
-
-        ImGui.SameLine();
-        ImGui.BeginDisabled(importBusy);
-        if (ImGui.Button("Load fights", new Vector2(-1, 0)))
-            LoadFights();
         ImGui.EndDisabled();
-
-        var parsed = ReportUrl.Parse(reportInput);
-        if (!parsed.IsValid && reportInput.Length > 0)
-            ImGui.TextDisabled("No report code in that. A code is 16 letters and digits.");
-
-        if (importBusy)
-        {
-            ImGui.Spacing();
-            ImGui.TextDisabled("Talking to FF Logs…");
-        }
-
-        DrawImportStatus();
+        if (importBusy) ImGui.TextDisabled("Talking to FF Logs…");
+        ImGui.BeginDisabled(importBusy || Plugin.Encounter.InCombat);
 
         if (fights is { Count: > 0 })
         {
@@ -130,6 +179,7 @@ public sealed partial class MainWindow
 
         if (loadedFight != null)
             DrawPreviewAndApply(plan, loadedFight);
+        ImGui.EndDisabled();
     }
 
     /// <summary>
@@ -138,51 +188,31 @@ public sealed partial class MainWindow
     /// </summary>
     private void DrawPlanFileImport()
     {
-        ImGui.TextDisabled("From raidplan.io");
         ImGui.Spacing();
-
-        ImGui.TextWrapped("Paste a link to a plan and it comes across as a plan of its own.");
-        ImGui.Spacing();
-
-        ImGui.SetNextItemWidth(-120 * UiHelpers.Scale);
-        UiHelpers.InputTextHint("##plan-link", "https://shikari.io/plan/…", ref planLink, 512);
-
-        ImGui.SameLine();
-        ImGui.BeginDisabled(planBusy);
-        if (ImGui.Button("Import", new Vector2(-1, 0)))
-            ImportFromLink();
-        ImGui.EndDisabled();
-
-        var parsedLink = PlanUrlParser.Parse(planLink);
-        if (!parsedLink.IsValid && planLink.Trim().Length > 0)
-            ImGui.TextDisabled("No plan code in that. A link looks like raidplan.io/plan/<code>.");
-
-        if (planBusy)
-            ImGui.TextDisabled("Fetching…");
-
-        if (ImGui.TreeNode("Or import a file you saved###plan-file-node"))
+        ImGui.BeginDisabled(ImportBusy || Plugin.Encounter.InCombat);
+        if (ImGui.TreeNode("Import a saved file###plan-file-node"))
         {
             ImGui.SetNextItemWidth(-1);
-            UiHelpers.InputTextHint("##plan-file", "Path to a saved .json file", ref planFilePath, 512);
+            UiHelpers.InputTextHint("##plan-file", "Path to a raidplan .json or Shikari .txt file", ref planFilePath, 512);
 
             if (ImGui.Button("Import that file", Vector2.Zero))
                 ImportPlanFile();
 
             ImGui.SameLine();
             UiHelpers.HelpMarker(
-                "For a plan a link cannot reach. Open it in a browser, press F12, and on the " +
-                "Network tab copy the response of the .json request from userdata.raidplan.io.");
+                "Choose a saved raidplan.io JSON file or a Shikari share-code text file. Files are imported as new plans.");
 
             ImGui.TreePop();
         }
 
+        ImGui.EndDisabled();
         if (planFileStatus.Length == 0)
             return;
 
         ImGui.Spacing();
-        ImGui.TextColored(
-            UiHelpers.Pack(planFileFailed ? Palette.Vec(Palette.Danger) : Palette.Vec(Palette.Good)),
-            planFileStatus);
+        ImGui.PushStyleColor(ImGuiCol.Text, Palette.Vec(planFileFailed ? Palette.Danger : Palette.Good));
+        ImGui.TextWrapped(planFileStatus);
+        ImGui.PopStyleColor();
     }
 
     private void ImportFromLink()
@@ -195,42 +225,12 @@ public sealed partial class MainWindow
             return;
         }
 
-        planBusy = true;
         planFileStatus = string.Empty;
-
-        var cancel = Plugin.Shutdown;
-
-        Task.Run(async () =>
+        Run(async cancel =>
         {
-            try
-            {
-                var json = await Plugin.PlanFetcher.GetAsync(parsed.Code, cancel).ConfigureAwait(false);
-                Adopt(json, parsed.Code);
-            }
-            catch (OperationCanceledException)
-            {
-                // Unloading.
-            }
-            catch (PlanFetchException ex)
-            {
-                Fail(ex.Message);
-            }
-            catch (Exception ex)
-            {
-                Fail("Could not reach raidplan.io: " + ex.Message);
-                Plugin.Log.Error(ex, "Fetching a raidplan.io plan failed.");
-            }
-            finally
-            {
-                planBusy = false;
-            }
-        }, cancel);
-
-        void Fail(string message)
-        {
-            planFileFailed = true;
-            planFileStatus = message;
-        }
+            var json = await Plugin.PlanFetcher.GetAsync(parsed.Code, cancel).ConfigureAwait(false);
+            return () => Adopt(json, parsed.Code);
+        });
     }
 
     private void ImportPlanFile()
@@ -253,7 +253,18 @@ public sealed partial class MainWindow
 
         try
         {
-            Adopt(System.IO.File.ReadAllText(path), System.IO.Path.GetFileNameWithoutExtension(path));
+            var file = new System.IO.FileInfo(path);
+            if (file.Length > 16 * 1024 * 1024) throw new System.IO.InvalidDataException("The file exceeds the 16 MB import limit.");
+            var content = System.IO.File.ReadAllText(path);
+            var source = ImportSource.Parse(content);
+            if (source.Kind == ImportKind.ShareCode)
+            {
+                importBuffer = source.Value;
+                DoImport(replaceExisting: false);
+                planFileStatus = importStatus;
+                planFileFailed = importStatusIsError;
+            }
+            else Adopt(content, System.IO.Path.GetFileNameWithoutExtension(path));
         }
         catch (Exception ex)
         {
@@ -316,7 +327,7 @@ public sealed partial class MainWindow
         if (string.IsNullOrEmpty(importDetail))
             return;
 
-        if (!ImGui.TreeNode("What FF Logs sent back###import-detail"))
+        if (!ImGui.TreeNode("Import details###import-detail"))
             return;
 
         ImGui.TextWrapped(importDetail.Length > 2000 ? importDetail[..2000] + "…" : importDetail);
@@ -451,81 +462,83 @@ public sealed partial class MainWindow
             var list = await Plugin.FfLogs.GetFightsAsync(
                 Plugin.Config.FfLogsClientId, Plugin.Config.FfLogsClientSecret, parsed.Code, cancel);
 
-            fights = list;
-            loadedFight = null;
-
-            selectedFight = parsed.FightId switch
+            return () =>
             {
-                ReportUrl.LastFight => list.Count - 1,
-                { } id => list.FindIndex(f => f.Id == id),
-                _ => -1,
+                fights = list;
+                loadedFight = null;
+                selectedFight = parsed.FightId switch
+                {
+                    ReportUrl.LastFight => list.Count - 1,
+                    { } id => list.FindIndex(f => f.Id == id),
+                    _ => -1,
+                };
+
+                if (selectedFight < 0 && list.Count > 0)
+                    selectedFight = list.FindIndex(f => f.Kill) is var kill && kill >= 0 ? kill : list.Count - 1;
+
+                importStatusLine = $"Found {list.Count} fight(s).";
+                importFailed = false;
             };
-
-            if (selectedFight < 0 && list.Count > 0)
-                selectedFight = list.FindIndex(f => f.Kill) is var kill && kill >= 0 ? kill : list.Count - 1;
-
-            importStatusLine = $"Found {list.Count} fight(s).";
-            importFailed = false;
         });
     }
 
     private void LoadFightData()
     {
         var parsed = ReportUrl.Parse(reportInput);
-        if (!parsed.IsValid || fights == null || selectedFight < 0)
+        if (!parsed.IsValid || fights == null || selectedFight < 0 || selectedFight >= fights.Count)
             return;
 
         var fight = fights[selectedFight];
 
         Run(async cancel =>
         {
-            loadedFight = await Plugin.FfLogs.GetFightDataAsync(
+            var data = await Plugin.FfLogs.GetFightDataAsync(
                 Plugin.Config.FfLogsClientId, Plugin.Config.FfLogsClientSecret, parsed.Code, fight, cancel);
 
-            importStatusLine = $"Loaded {fight.Name}.";
-            importFailed = false;
+            return () =>
+            {
+                loadedFight = data;
+                importStatusLine = $"Loaded {fight.Name}.";
+                importFailed = false;
+            };
         });
     }
 
-    private void Run(Func<CancellationToken, Task> work)
+    // Workers fetch data only. Results enter the UI and plan store together on the draw thread.
+    private void Run(Func<CancellationToken, Task<Action>> work)
     {
-        importBusy = true;
-        importStatusLine = string.Empty;
-        importDetail = string.Empty;
-
+        if (ImportBusy) return;
+        importStatusLine = importDetail = string.Empty;
         var cancel = Plugin.Shutdown;
+        importLoad = Task.Run(() => work(cancel), cancel);
+    }
 
-        Task.Run(async () =>
+    private void PollImport()
+    {
+        if (importLoad?.IsCompleted != true) return;
+        try
         {
-            try
-            {
-                await work(cancel);
-            }
-            catch (OperationCanceledException)
-            {
-                // Plugin is unloading mid-request. Nothing left to report to.
-                return;
-            }
-            catch (FfLogsException ex)
-            {
-                if (cancel.IsCancellationRequested)
-                    return;
+            var apply = importLoad.GetAwaiter().GetResult();
+            Plugin.Shutdown.ThrowIfCancellationRequested();
+            if (Plugin.Encounter.InCombat)
+                throw new InvalidOperationException("Import finished during combat. Retry after the pull.");
+            apply();
+        }
+        catch (OperationCanceledException) { }
+        catch (FfLogsException ex) { Fail(ex.Message, ex.Detail); }
+        catch (PlanFetchException ex) { Fail(ex.Message); }
+        catch (Exception ex)
+        {
+            Fail("Import failed: " + ex.Message);
+            Plugin.Log.Error(ex, "Import failed.");
+        }
+        finally { importLoad = null; }
+    }
 
-                Fail(ex.Message, ex.Detail);
-            }
-            catch (Exception ex)
-            {
-                if (cancel.IsCancellationRequested)
-                    return;
-
-                Fail("Import failed: " + ex.Message);
-                Plugin.Log.Error(ex, "FF Logs import failed.");
-            }
-            finally
-            {
-                importBusy = false;
-            }
-        }, cancel);
+    private void DisposeImport()
+    {
+        if (importLoad != null)
+            _ = importLoad.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
     }
 
     private void Fail(string message, string? detail = null)

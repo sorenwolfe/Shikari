@@ -49,13 +49,16 @@ You can also build slides from observed mechanics in **Learned** after a few pul
 
 ## Bring in a strategy
 
-**A Shikari share code:** open **Plan → Share**, paste the code, and choose **Import as a new plan**. Use the same tab to copy your own plan's code for your group.
+Open **Plan → Import**, paste a link or Shikari share code into the bar, and press **Import** (or Enter). Shikari recognizes the source and shows the options you need:
 
-**A raidplan.io link:** open **Plan → Import** and paste the link to bring in its slides and editable diagrams.
+- **raidplan.io:** brings in the slides and editable diagrams as a new plan.
+- **WTFDIG:** loads the guide so you can check your strategy, role, group, and variants. Strategy links such as `#caro` preselect that strategy. Import the guide or choose one of its linked editable raidplans.
+- **FF Logs:** lets you choose a pull and preview its timeline and available cooldown assignments before adding them to the current plan. API setup appears here when needed.
+- **Shikari share code:** imports a new copy. Enable **Update the saved plan with the same ID** to replace a matching saved plan with an update from your raid lead.
 
-**A WTFDIG fight link:** open **Plan → Import**, load the guide, and choose your strategy, role, group, and any additional options. Check the preview, then import the guide or one of its linked editable raidplans. Guide images are references, so they don't provide calibrated Live positions. Imported guide timings stay disabled until you review and link them.
+Use **Import a saved file** for a raidplan JSON file or a Shikari share-code text file. To send your own plan to the group, open **Plan → Share**.
 
-**An FF Logs report:** open **Plan → Import** to bring in a fight timeline and available cooldown assignments. This needs your FF Logs API credentials, which you can set up in the plugin.
+WTFDIG guide images are references and don't provide calibrated Live positions. Imported guide timings stay disabled until you review and link them. Importing a guide or log does not automatically create adaptive rules.
 
 ## Find your spot during a pull
 

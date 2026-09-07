@@ -16,7 +16,6 @@ namespace Shikari.UI;
 public sealed partial class MainWindow
 {
     private readonly WtfDigClient wtfClient = new();
-    private string wtfUrl = "";
     private string wtfStatus = "";
     private bool wtfError;
     private bool wtfImages = true;
@@ -30,26 +29,6 @@ public sealed partial class MainWindow
 
     private void DrawWtfDigImport()
     {
-        using (Plugin.Fonts.PushHeading()) ImGui.TextUnformatted("WTFDIG");
-        ImGui.TextWrapped("Bring a selected fight guide into your plan, or import one of its linked editable raidplans.");
-        ImGui.BeginDisabled(WtfBusy);
-        ImGui.SetNextItemWidth(-130 * UiHelpers.Scale);
-        UiHelpers.InputTextHint("##wtfdig-link", "https://wtfdig.info/74/m9s", ref wtfUrl, 4096);
-        ImGui.SameLine();
-        if (ImGui.Button("Load guide", new Vector2(-1, 0)))
-        {
-            try
-            {
-                var link = WtfDigLink.Parse(wtfUrl);
-                wtfGuide = null; wtfPreview = null;
-                wtfCancel = CancellationTokenSource.CreateLinkedTokenSource(Plugin.Shutdown);
-                var token = wtfCancel.Token;
-                wtfLoad = Task.Run(() => wtfClient.LoadAsync(link, token), token);
-                wtfStatus = "Loading guide data…"; wtfError = false;
-            }
-            catch (Exception ex) { WtfFail(ex); }
-        }
-        ImGui.EndDisabled();
         if (WtfBusy && ImGui.SmallButton("Cancel WTFDIG import")) wtfCancel?.Cancel();
         if (wtfStatus.Length > 0)
         {
@@ -57,7 +36,7 @@ public sealed partial class MainWindow
             ImGui.TextWrapped(wtfStatus); ImGui.PopStyleColor();
         }
         if (wtfGuide == null) return;
-        ImGui.BeginDisabled(WtfBusy);
+        ImGui.BeginDisabled(WtfBusy || Plugin.Encounter.InCombat);
         ImGui.TextUnformatted(wtfGuide.Title);
         ImGui.TextDisabled("Verify selections below. Link options without a matching control are not applied.");
         if (ImGui.BeginCombo("Strategy##wtfdig", wtfSelection.Strategy.Length == 0 ? "Choose a strategy" : wtfSelection.Strategy))
@@ -131,6 +110,21 @@ public sealed partial class MainWindow
         }
         ImGui.EndDisabled();
         ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
+    }
+
+    private void StartWtfGuide(string url)
+    {
+        if (WtfBusy) return;
+        try
+        {
+            var link = WtfDigLink.Parse(url);
+            wtfGuide = null; wtfPreview = null;
+            wtfCancel = CancellationTokenSource.CreateLinkedTokenSource(Plugin.Shutdown);
+            var token = wtfCancel.Token;
+            wtfLoad = Task.Run(() => wtfClient.LoadAsync(link, token), token);
+            wtfStatus = "Loading guide data…"; wtfError = false;
+        }
+        catch (Exception ex) { WtfFail(ex); }
     }
 
     private void RebuildWtfPreview()

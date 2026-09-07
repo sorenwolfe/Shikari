@@ -185,6 +185,7 @@ public sealed partial class MainWindow : Window, IDisposable
     public override void Draw()
     {
         PollWtfDig();
+        PollImport();
         // Sits on the background list so it lands under the window's own fill.
         if (Plugin.Config.ThemeEnabled && Plugin.Config.ThemeShadows)
         {
@@ -367,5 +368,6 @@ public sealed partial class MainWindow : Window, IDisposable
     public void Dispose()
     {
         DisposeWtfDig();
+        DisposeImport();
     }
 }
