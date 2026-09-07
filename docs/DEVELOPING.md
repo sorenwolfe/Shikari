@@ -141,7 +141,7 @@ The output lands in `RaidPlan/bin/Release/` with a `RaidPlan` folder ready for D
 1. `/xlsettings` → Experimental → add `…/RaidPlan/bin/Release/RaidPlan/RaidPlan.dll` to
    *Dev Plugin Locations*.
 2. `/xlplugins` → Dev Tools → Installed Dev Plugins → enable RaidPlan.
-3. `/raidplan`.
+3. `/shikari`.
 
 If MSBuild can't find the Dalamud assemblies, set `DALAMUD_HOME` to your Dalamud `dev` folder —
 on Windows that's `%AppData%\XIVLauncher\addon\Hooks\dev`.

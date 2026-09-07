@@ -23,9 +23,6 @@ public sealed class Plugin : IDalamudPlugin
     private const string CommandName = "/shikari";
     private const string CommandAlias = "/rp";
 
-    /// <summary>What it was called before the rename. Still works, and always will.</summary>
-    private const string CommandLegacy = "/raidplan";
-
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
@@ -143,18 +140,13 @@ public sealed class Plugin : IDalamudPlugin
             HelpMessage =
                 "Open the raid strategy planner.\n" +
                 "        /shikari config  →  open settings\n" +
+                "        /shikari review  →  open mechanic replay\n" +
                 "        /shikari calls   →  toggle live shotcalls\n" +
                 "        /shikari next    →  show the next slide\n" +
                 "        /shikari prev    →  show the previous slide\n" +
                 "        /shikari follow  →  toggle slides following the fight\n" +
                 "        /shikari mini    →  toggle the small in-fight window\n" +
                 "        /shikari reset   →  jump back to the first slide",
-        });
-
-        CommandManager.AddHandler(CommandLegacy, new CommandInfo(OnCommand)
-        {
-            HelpMessage = "The old name for /shikari. Still works.",
-            ShowInHelp = false,
         });
 
         CommandManager.AddHandler(CommandAlias, new CommandInfo(OnCommand)
@@ -249,7 +241,7 @@ public sealed class Plugin : IDalamudPlugin
 
             default:
                 ChatGui.PrintError(
-                    $"Unknown option '{argument}'. Try: config, calls, follow, mini, reset, next, prev.",
+                    $"Unknown option '{argument}'. Try: config, review, calls, follow, mini, reset, next, prev.",
                     "Shikari",
                     null);
                 break;
@@ -289,7 +281,6 @@ public sealed class Plugin : IDalamudPlugin
         // without consequence; these five are Dalamud's and must come off no matter what.
         Safely(() => CommandManager.RemoveHandler(CommandName), "remove " + CommandName);
         Safely(() => CommandManager.RemoveHandler(CommandAlias), "remove " + CommandAlias);
-        Safely(() => CommandManager.RemoveHandler(CommandLegacy), "remove " + CommandLegacy);
         Safely(() => ArenaSpot?.Dispose(), "detach the arena spot");
         Safely(() => PluginInterface.UiBuilder.Draw -= WindowSystem.Draw, "detach the draw hook");
         Safely(() => PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfig, "detach the config button");

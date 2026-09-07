@@ -86,6 +86,10 @@ Open **Review** or use `/shikari review`. Pick an attempt and a mechanic, then p
 
 Recording and saved-attempt controls are under **Review → Recording & storage**. Recordings stay on your computer and aren't included in shared plan codes.
 
+## Moving from RaidPlan
+
+Disable or uninstall the old **RaidPlan** plugin in `/xlplugins` and keep **Shikari** enabled. They are separate installations, so leaving both enabled can open the old viewer or show duplicate windows. Use `/shikari` or `/rp`; Shikari no longer registers `/raidplan`.
+
 ## Need a hand?
 
 If something looks wrong, check your selected seat and the alignment message first. For bugs or suggestions, [open an issue](https://github.com/sorenwolfe/Shikari/issues) with what you were doing and a screenshot if possible.
