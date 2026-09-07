@@ -23,6 +23,7 @@ public sealed class ReplayStore : IDisposable
     private readonly Task<List<ReplayAttempt>> loading;
     private Task writes = Task.CompletedTask;
     private ReplayBuffer? buffer;
+    private LocalEvidenceCapture capture = new();
     private float nextSample;
     private bool loaded;
     private bool disposed;
@@ -51,7 +52,9 @@ public sealed class ReplayStore : IDisposable
     {
         if (buffer == null || buffer.Attempt.StatusObservations.Count >= 4096) return;
         buffer.Attempt.StatusObservations.Add(new StatusObservation { Time = (float)clock.Elapsed.TotalSeconds,
-            StatusId = observation.StatusId, Duration = observation.Duration, Parameter = observation.Parameter, SourceId = observation.SourceId });
+            StatusId = observation.StatusId, Duration = observation.Duration, Parameter = observation.Parameter, SourceId = observation.SourceId,
+            Removed = observation.Removed, Baseline = observation.Baseline,
+            ParameterKnown = observation.ParameterKnown, DurationKnown = observation.DurationKnown });
     }
 
     private void RecordDecision(AdaptiveDecision decision)
@@ -70,6 +73,7 @@ public sealed class ReplayStore : IDisposable
         if (!Plugin.Config.ReplayEnabled || plan == null || plan.Slides.Count == 0) return;
         try
         {
+            capture = new LocalEvidenceCapture();
             buffer = new ReplayBuffer(plan, Plugin.Roster.ResolveLocalSlot(plan), DateTime.UtcNow);
             buffer.Attempt.TerritoryId = Plugin.ClientState.TerritoryType;
             nextSample = 0;
@@ -108,6 +112,7 @@ public sealed class ReplayStore : IDisposable
         nextSample = time + ReplayBuffer.SampleInterval;
         try
         {
+            capture.Capture(buffer.Attempt, time);
             var plan = buffer.Attempt.Plan;
             // Use the recorded plan even if the editor is changed mid-pull. A different active
             // plan has no meaningful slide correspondence and must create a gap instead.
@@ -133,6 +138,7 @@ public sealed class ReplayStore : IDisposable
         }
         catch (Exception ex)
         {
+            capture.Invalidate(buffer.Attempt, time);
             buffer.TryAdd(new ReplayFrame { Time = time });
             status = "A recording sample was unavailable: " + ex.Message;
         }
@@ -141,15 +147,20 @@ public sealed class ReplayStore : IDisposable
     private void Cast(CastEvent cast)
     {
         if (buffer == null) return;
+        var matched = false;
         foreach (var entry in buffer.Attempt.Plan.Timeline.Where(e => e.Enabled && e.CastActionId == cast.ActionId &&
                      e.Trigger is TriggerKind.BossCast or TriggerKind.AfterCast or TriggerKind.Predicted &&
                      (e.Occurrence <= 0 || e.Occurrence == cast.Occurrence)))
         {
+            matched = true;
             var expected = cast.CombatTime + (entry.Trigger == TriggerKind.AfterCast ? entry.OffsetSeconds : cast.TotalCastTime);
             buffer.AddMechanic(new ReplayMechanic { EntryId = entry.Id, SlideId = entry.SlideId, Label = entry.Label,
                 ActionId = cast.ActionId, Occurrence = cast.Occurrence, Time = cast.CombatTime,
                 ExpectedResolve = expected });
         }
+        if (!matched)
+            buffer.AddMechanic(new ReplayMechanic { ActionId = cast.ActionId, Occurrence = cast.Occurrence,
+                Label = "Cast #" + cast.ActionId, Time = cast.CombatTime, ExpectedResolve = cast.CombatTime + cast.TotalCastTime });
     }
 
     private void End() => Finish(Plugin.Encounter.LastPullWasWipe ? "Wipe" : "Combat ended");
@@ -164,17 +175,34 @@ public sealed class ReplayStore : IDisposable
         if (completed == null) return;
         completed.Mechanics.RemoveAll(m => m.Time > completed.Duration);
         completed.StatusObservations.RemoveAll(s => s.Time > completed.Duration);
+        completed.Evidence.Statuses.RemoveAll(s => s.Time > completed.Duration);
+        completed.Evidence.Positions.RemoveAll(s => s.Time > completed.Duration);
         completed.AdaptiveDecisions.RemoveAll(d => d.Time > completed.Duration);
-        attempts.Insert(0, completed);
+        try { AddImported(completed); }
+        catch (Exception ex) { status = "Replay could not be saved: " + ex.Message; Plugin.Log.Warning(ex, "Replay save failed."); }
+    }
+
+    public void AddImported(ReplayAttempt attempt)
+    {
+        if (!ReplayValidation.IsValid(attempt)) throw new IOException("Replay evidence failed validation.");
+        SaveEvidence(attempt);
+        attempts.RemoveAll(a => a.Id == attempt.Id);
+        attempts.Insert(0, attempt);
+        if (loaded) Trim();
+    }
+
+    public void SaveEvidence(ReplayAttempt attempt)
+    {
+        if (!ReplayValidation.IsValid(attempt)) throw new IOException("Replay evidence failed validation.");
+        // Snapshot now, so edits made while a queued write runs cannot tear the saved file.
+        var json = JsonConvert.SerializeObject(attempt, PlanJson.Compact());
+        if (System.Text.Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
+            throw new IOException("This replay exceeds the local file size limit.");
         Queue(() =>
         {
             Directory.CreateDirectory(directory);
-            var json = JsonConvert.SerializeObject(completed, PlanJson.Compact());
-            if (System.Text.Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
-                throw new IOException("This replay exceeds the local file size limit; it remains available until reload.");
-            AtomicFile.WriteAllText(PathFor(completed.Id), json);
+            AtomicFile.WriteAllText(PathFor(attempt.Id), json);
         });
-        if (loaded) Trim();
     }
 
     private void Trim()

@@ -53,7 +53,7 @@ Open **Plan → Import**, paste a link or Shikari share code into the bar, and p
 
 - **raidplan.io:** brings in the slides and editable diagrams as a new plan.
 - **WTFDIG:** loads the guide so you can check your strategy, role, group, and variants. Strategy links such as `#caro` preselect that strategy. Import the guide or choose one of its linked editable raidplans.
-- **FF Logs:** lets you choose a pull and preview its timeline and available cooldown assignments before adding them to the current plan. API setup appears here when needed.
+- **FF Logs:** lets you choose a pull and preview its timeline and available cooldown assignments. Choose **Review this pull with this plan** to inspect its recorded statuses and positions alongside your strategy. API setup appears here when needed.
 - **Shikari share code:** imports a new copy. Enable **Update the saved plan with the same ID** to replace a matching saved plan with an update from your raid lead.
 
 Use **Import a saved file** for a raidplan JSON file or a Shikari share-code text file. To send your own plan to the group, open **Plan → Share**.
@@ -83,11 +83,28 @@ Choose how you receive reminders in **Settings**: on-screen calls, chat, notific
 
 For mechanics where your assignment changes with a buff or debuff, use **Plan → Adaptive** to set up the conditions and corresponding slides. Check each rule before enabling it. Imported rules start disabled, and importing a guide doesn't automatically create these assignments.
 
+A rule can require up to four statuses at once, with optional duration and parameter conditions. This lets you describe combinations such as a role assignment plus a numbered debuff. Plans containing these combined conditions need an updated Shikari client to import.
+
 ## Look back after a pull
 
 Open **Review** or use `/shikari review`. Pick an attempt and a mechanic, then play or scrub through the recorded positions over your plan. You can compare attempts to see what changed.
 
 Recording and saved-attempt controls are under **Review → Recording & storage**. Recordings stay on your computer and aren't included in shared plan codes.
+
+### Connect a log to your strategy
+
+1. Import or open your raidplan or WTFDIG strategy first. Then paste an FF Logs report into the same import bar, select a fight, and choose **Review this pull with this plan**.
+2. In **Review**, select a cast and scrub to the assignment. Expand **Statuses & strategy**, choose a player, and set their plan seat to compare the same role across pulls.
+3. Read the slide notes beside that player's active buffs and debuffs. Choose the strategy slide that matches their assignment. **Link cast to this slide** saves a timeline link for you to review before enabling it.
+4. Select the relevant statuses, set the duty, and use **Test selected assignment**. If the result fits the strategy, choose **Add disabled rule to plan**, then review its conditions in **Plan → Adaptive** before enabling it.
+
+The test checks one recorded player's assignment. Check the other possible assignments and more pulls before relying on the rule. Guide prose and example positions don't automatically establish which outcome is correct.
+
+Log positions appear on a source map because their coordinates differ from the plan. **Overlay on strategy** needs three known landmarks entered in both coordinate systems. Alignment belongs to that slide; missing position samples remain gaps. When comparing pulls, Shikari lines them up at the same cast occurrence.
+
+New local recordings also retain readable party buffs, debuffs, and positions, so you can inspect your own pulls through the same controls. Older recordings keep their existing playback but won't gain status history retroactively. Unknown status parameters stay unknown; incomplete log imports can be inspected but can't generate rules.
+
+Rule drafts use observed status durations with a two-second margin. Review those ranges for mechanics where timer lengths determine the assignment. Replay evidence stays local; sharing a plan sends the rules you authored, not the recorded players or their history.
 
 ## Moving from RaidPlan
 

@@ -123,3 +123,5 @@ namespace Shikari.Tests
         }
     }
 }
+
+namespace Shikari.Services.Replay { public sealed class LocalEvidenceCapture { public void Capture(ReplayAttempt a, float t) { } public void Invalidate(ReplayAttempt a, float t) { } } }

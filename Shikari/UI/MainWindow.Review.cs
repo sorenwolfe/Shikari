@@ -38,7 +38,7 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("MECHANIC REPLAY");
         ImGui.SameLine();
         ImGui.TextColored(Palette.Vec(store.Recording ? Palette.Good : Palette.TextMuted),
-            store.Recording ? "  RECORDING PULL" : "  LOCAL ATTEMPTS");
+            store.Recording ? "  RECORDING PULL" : "  SAVED PULLS");
         ImGui.TextDisabled("Study the movement. Return to the plan with one clear adjustment.");
         if (!string.IsNullOrEmpty(store.Status))
             ImGui.TextWrapped(store.Status);
@@ -121,6 +121,7 @@ public sealed partial class MainWindow
         }
         DrawReviewTransport(attempt);
         DrawAdaptiveEvidence(attempt);
+        DrawEvidencePanel(attempt);
         if (attempt.Mechanics.Count > 0 && SelectedReviewMechanic(attempt)?.Time != reviewTime)
             reviewMechanicIndex = Math.Max(0, attempt.Mechanics.FindLastIndex(m => m.Time <= reviewTime));
 
@@ -240,7 +241,8 @@ public sealed partial class MainWindow
     }
 
     private static ReplayMechanic? MatchingReviewMechanic(ReplayAttempt attempt, ReplayMechanic mechanic) =>
-        attempt.Mechanics.FirstOrDefault(m => m.EntryId == mechanic.EntryId && m.ActionId == mechanic.ActionId && m.Occurrence == mechanic.Occurrence);
+        attempt.Mechanics.FirstOrDefault(m => m.ActionId == mechanic.ActionId && m.Occurrence == mechanic.Occurrence &&
+            (mechanic.ActionId != 0 || m.EntryId == mechanic.EntryId));
 
     private void DrawReviewComparison(ReplayAttempt attempt, ReplayMechanic mechanic)
     {
@@ -259,6 +261,20 @@ public sealed partial class MainWindow
         if (candidates.Count == 0) ImGui.TextWrapped("Another attempt of this plan and mechanic occurrence will appear here.");
         if (comparison == null) return;
         var other = MatchingReviewMechanic(comparison, mechanic)!;
+        var comparisonTime = other.Time + reviewTime - mechanic.Time;
+        if (comparisonTime < 0 || comparisonTime > comparison.Duration)
+        {
+            ImGui.TextWrapped("The comparison pull has no recording at this synchronized time.");
+            return;
+        }
+        var actors = comparison.Evidence.Actors.Where(a => reviewSeat >= 0 && a.SlotIndex == reviewSeat).ToArray();
+        if (actors.Length == 1)
+        {
+            var statuses = CachedEvidenceTimeline(comparison).StatusesAt(actors[0].Id, comparisonTime);
+            ImGui.TextWrapped($"Comparison at {comparisonTime:0.1}s: " +
+                (statuses.Count == 0 ? "No active status evidence." : string.Join(", ", statuses.Take(12).Select(EvidenceStatusName))));
+        }
+        else ImGui.TextWrapped("Assign the comparison player to the same plan seat to compare their statuses.");
         var distance = ReplayPlayback.DistanceAt(comparison, other, reviewSeat);
         ImGui.TextWrapped(distance.HasValue ? $"Comparison checkpoint: {distance.Value:0.0} yalms" : "Comparison checkpoint: unknown");
         ImGui.TextWrapped(CompatibleReplayBoards(attempt, comparison)
@@ -286,6 +302,11 @@ public sealed partial class MainWindow
         ImGui.SameLine();
         ImGui.Checkbox("Trails", ref reviewTrails);
         ImGui.TextDisabled("Filled tokens: plan   /   Rings: recorded positions   /   Trails: last 5 seconds");
+        if (attempt.Evidence.Positions.Count > 0 && (attempt.Evidence.Source == "FF Logs" || frame == null))
+        {
+            DrawEvidenceMap(attempt, slide);
+            return;
+        }
         if (frame == null)
             ImGui.TextColored(Palette.Vec(Palette.Attention), "No aligned sample at this time. Player positions are unavailable.");
         if (slide == null)
@@ -328,6 +349,8 @@ public sealed partial class MainWindow
                 }
         }
         draw.PopClipRect();
+        if (comparison?.Evidence.Positions.Count > 0 && comparison.Evidence.Source == "FF Logs")
+            DrawEvidenceComparisonOverlay(attempt, slide);
     }
 
     // Cache by immutable attempt identity: comparison must not serialize large plans every frame.

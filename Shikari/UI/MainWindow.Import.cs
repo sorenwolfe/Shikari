@@ -342,6 +342,9 @@ public sealed partial class MainWindow
         ImGui.TextDisabled("What's in this pull");
         ImGui.Separator();
 
+        if (ImGui.Button("Review this pull with this plan")) LoadLogReview(plan, data);
+        ImGui.TextDisabled("Compare recorded statuses and movement with this strategy in Review.");
+        ImGui.Spacing();
         var players = data.Actors.Where(a => a.IsPlayer).ToList();
         ImGui.TextUnformatted(
             $"{data.EnemyCasts.Count} boss casts, {data.PlayerCasts.Count} player casts, {players.Count} players.");

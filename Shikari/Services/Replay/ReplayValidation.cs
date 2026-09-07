@@ -15,6 +15,20 @@ public static class ReplayValidation
             attempt.Plan.Slides.Any(s => s == null || s.Items == null || s.Items.Any(i => i == null || i.Points == null)) ||
             attempt.Plan.Roster.Any(r => r == null) || attempt.Plan.Timeline.Any(e => e == null)) return false;
         var last = -1f;
+        var evidence = attempt.Evidence;
+        if (evidence == null || evidence.Actors == null || evidence.Statuses == null || evidence.Positions == null ||
+            evidence.References == null || evidence.Warnings == null || evidence.Actors.Count > 32 ||
+            evidence.Statuses.Count > ReplayEvidence.MaxStatuses || evidence.Positions.Count > ReplayEvidence.MaxPositions ||
+            evidence.References.Count > 8 || evidence.Warnings.Count > 100 ||
+            evidence.Actors.Any(a => a == null || a.Id <= 0 || a.Name == null || a.Name.Length > 256 || a.SlotIndex < -1 || a.SlotIndex >= attempt.Plan.Roster.Count) ||
+            evidence.Actors.Select(a => a.Id).Distinct().Count() != evidence.Actors.Count ||
+            evidence.Statuses.Any(s => s == null || !float.IsFinite(s.Time) || s.Time < 0 || s.Time > attempt.Duration ||
+                s.ActorId <= 0 || s.Duration is { } duration && (!float.IsFinite(duration) || duration < 0 || duration > 86400) ||
+                s.Parameter is < 0 or > 65535 || s.Change is not ("apply" or "refresh" or "remove" or "unavailable" or "stacks")) ||
+            evidence.Positions.Any(p => p == null || !float.IsFinite(p.Time) || p.Time < 0 || p.Time > attempt.Duration ||
+                p.ActorId <= 0 || !float.IsFinite(p.Position.X) || !float.IsFinite(p.Position.Y)) ||
+            evidence.References.Any(r => r == null || !float.IsFinite(r.Source.X) || !float.IsFinite(r.Source.Y) ||
+                !float.IsFinite(r.Board.X) || !float.IsFinite(r.Board.Y))) return false;
         if (attempt.StatusObservations == null || attempt.AdaptiveDecisions == null ||
             attempt.StatusObservations.Count > 4096 || attempt.AdaptiveDecisions.Count > 1024 ||
             attempt.StatusObservations.Any(s => s == null || !float.IsFinite(s.Time) || s.Time < 0 || s.Time > attempt.Duration ||

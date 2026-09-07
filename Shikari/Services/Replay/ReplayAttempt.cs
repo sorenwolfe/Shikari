@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Numerics;
 using Shikari.Model;
 
@@ -12,6 +13,7 @@ public sealed class ReplayAttempt
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public DateTime StartedUtc { get; set; }
     public PlanDocument Plan { get; set; } = new();
+    [DefaultValue(-1)]
     public int LocalSlot { get; set; } = -1;
     public uint TerritoryId { get; set; }
     public List<ReplayFrame> Frames { get; set; } = new();
@@ -20,6 +22,7 @@ public sealed class ReplayAttempt
     public List<AdaptiveDecision> AdaptiveDecisions { get; set; } = new();
     public float Duration { get; set; }
     public string EndReason { get; set; } = "Ended";
+    public ReplayEvidence Evidence { get; set; } = new();
 }
 
 public sealed class ReplayFrame
@@ -35,7 +38,7 @@ public sealed class ReplayPlayer
 {
     public string Name { get; set; } = string.Empty;
     public uint JobId { get; set; }
-    public int SlotIndex { get; set; } = -1;
+    public int SlotIndex { get; set; }
     public Vector2 Board { get; set; }
     public bool IsLocal { get; set; }
 }
