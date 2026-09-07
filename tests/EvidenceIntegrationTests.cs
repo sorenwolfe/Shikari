@@ -17,7 +17,7 @@ namespace Shikari.Tests
             var plan = PlanDocument.CreateDefault();
             plan.Name = "Caro reference";
             plan.Timeline.Add(new TimelineEntry { CastActionId = 123, Occurrence = 2, SlideId = plan.Slides[0].Id });
-            var data = new LogFightData { ReportCode = "abcdefghijklmnop", Fight = new LogFight { Id = 30, StartTime = 10000, EndTime = 30000 } };
+            var data = new LogFightData { ReportCode = "abcdefghijklmnop", Fight = new LogFight { Id = 30, EncounterId = 1234, StartTime = 10000, EndTime = 30000 } };
             data.Actors.Add(new LogActor { Id = 1, Name = "First", Type = "Player", Job = "BlackMage" });
             data.Actors.Add(new LogActor { Id = 2, Name = "Second", Type = "Player", Job = "BlackMage" });
             data.EnemyCasts.Add(new LogCast { AbilityId = 123, AbilityName = "Assignment", TimeSeconds = 1, IsCastStart = true });
@@ -30,6 +30,7 @@ namespace Shikari.Tests
             source.Positions.Add(new LogPosition { ActorId=1, Time=1, X=10001, Y=10000 });
             var attempt = LogReplayBuilder.Build(plan, data, source, id => id is 10 or 20, _ => 25);
             Check(ReplayValidation.IsValid(attempt), "Imported evidence validates with no fabricated aligned frames");
+            Check(attempt.Evidence.EncounterId == 1234, "Replay evidence retains source encounter identity");
             Check(attempt.Frames.Count == 0 && attempt.Evidence.Positions.Single().Position.X == 10001, "Raw coordinates retained, duplicates resolved");
             Check(attempt.Evidence.Statuses.Single(s => s.ActorId == 2).StatusId == 0, "Unknown game status row cannot become a live condition");
             Check(attempt.Mechanics[0].SlideId == "" && attempt.Mechanics[1].SlideId == plan.Slides[0].Id, "Exact action and occurrence binding");

@@ -12,11 +12,12 @@ namespace Dalamud.Bindings.ImGui
     public sealed class ImDrawListPtr
     {
         public Graphics G;
+        public int MarkerCalls;
         public ImDrawListPtr(Graphics g) { G = g; }
         private static Color C(uint c) => Color.FromArgb((int)(c >> 24), (int)(c & 255), (int)((c >> 8) & 255), (int)((c >> 16) & 255));
         private static PointF P(Vector2 p) => new(p.X,p.Y);
-        public void AddCircleFilled(Vector2 p,float r,uint c,int segments) { using var b = new SolidBrush(C(c)); G.FillEllipse(b,p.X-r,p.Y-r,r*2,r*2); }
-        public void AddCircle(Vector2 p,float r,uint c,int segments,float width) { using var pen = new Pen(C(c),width); G.DrawEllipse(pen,p.X-r,p.Y-r,r*2,r*2); }
+        public void AddCircleFilled(Vector2 p,float r,uint c,int segments) { MarkerCalls++; using var b = new SolidBrush(C(c)); G.FillEllipse(b,p.X-r,p.Y-r,r*2,r*2); }
+        public void AddCircle(Vector2 p,float r,uint c,int segments,float width) { MarkerCalls++; using var pen = new Pen(C(c),width); G.DrawEllipse(pen,p.X-r,p.Y-r,r*2,r*2); }
         public void AddLine(Vector2 a,Vector2 b,uint c,float width) { using var pen = new Pen(C(c),width); G.DrawLine(pen,P(a),P(b)); }
         public void AddTriangleFilled(Vector2 a,Vector2 b,Vector2 d,uint c) => Fill(new[]{P(a),P(b),P(d)},c);
         public void AddQuadFilled(Vector2 a,Vector2 b,Vector2 d,Vector2 e,uint c) => Fill(new[]{P(a),P(b),P(d),P(e)},c);
@@ -60,6 +61,36 @@ namespace Shikari.UI
         public float SettleTolerance { get; set; }
         public IReadOnlyList<ArenaTracker.LivePlayer>? LivePlayers { get; set; }
         private Vector2 ToScreen(Vector2 p) => origin+p*side;
+        public static void CheckPersonalView()
+        {
+            using var bitmap = new Bitmap(240, 240);
+            using var graphics = Graphics.FromImage(bitmap);
+            var draw = new ImDrawListPtr(graphics);
+            var canvas = new ArenaCanvas { MiniYourView = true, HighlightSlot = 2, side = 220 };
+            var plan = PlanDocument.CreateDefault();
+            var slide = new Slide();
+            foreach (var slot in new[] { -1, 0, 1, 3, 4, 5, 6, 7 })
+                canvas.DrawMiniToken(draw, plan, new CanvasItem { SlotIndex = slot, Text = "OTHER" }, new Vector2(20));
+            if (draw.MarkerCalls != 0 || canvas.miniLabels.Count != 0) throw new Exception("Your view leaked another planned marker or label");
+            canvas.LivePlayers = new[] { new ArenaTracker.LivePlayer("Other", 0, 2, new Vector2(0.2f), false) };
+            canvas.DrawMiniLivePlayers(draw, plan, slide);
+            if (draw.MarkerCalls != 0 || canvas.miniLabels.Count != 0) throw new Exception("Your view leaked a nonlocal live player sharing the seat");
+            canvas.HighlightSlot = -1;
+            canvas.DrawMiniToken(draw, plan, new CanvasItem { SlotIndex = -1 }, new Vector2(20));
+            if (draw.MarkerCalls != 0) throw new Exception("Unresolved seat must not claim an unbound token");
+            canvas.LivePlayers = new[] { new ArenaTracker.LivePlayer("You", 0, -1, new Vector2(0.4f), true) };
+            canvas.DrawMiniLivePlayers(draw, plan, slide);
+            if (draw.MarkerCalls == 0 || !canvas.miniLabels.Any(l => l.Text == "YOU")) throw new Exception("Known local live player must remain visible without a resolved seat");
+            canvas.HighlightSlot = 2;
+            var before = draw.MarkerCalls;
+            canvas.DrawMiniToken(draw, plan, new CanvasItem { SlotIndex = 2 }, new Vector2(20));
+            if (draw.MarkerCalls <= before) throw new Exception("Your planned marker disappeared");
+            before = draw.MarkerCalls;
+            canvas.MiniYourView = false;
+            canvas.DrawMiniToken(draw, plan, new CanvasItem { SlotIndex = 1, Text = "T2" }, new Vector2(20));
+            if (draw.MarkerCalls <= before || !canvas.miniLabels.Any(l => l.Text == "T2")) throw new Exception("All-player view must restore other markers and captions");
+            Console.WriteLine("PASS: production personal renderer hides other planned/live players and labels, handles unresolved seats and restores all-player view");
+        }
         public static void CheckArrival()
         {
             var canvas = new ArenaCanvas { HighlightSlot = 0, SettleTolerance = 0.1f };

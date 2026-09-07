@@ -9,6 +9,18 @@ namespace Shikari.UI;
 /// <summary>Mini-map presentation rules; never changes saved geometry or colours.</summary>
 public static class MiniMapLayout
 {
+    /// <summary>Keep the arena square and leave a bounded scrollable footer within the viewport.</summary>
+    public static Vector2 FitWindow(float boardSide, float footerHeight, Vector2 viewport)
+    {
+        var available = Vector2.Max(Vector2.One, viewport);
+        var footer = Math.Clamp(footerHeight, 0, available.Y * 0.45f);
+        var side = Math.Clamp(boardSide, 1, MathF.Max(1, MathF.Min(available.X, available.Y - footer)));
+        return new Vector2(side, side + footer);
+    }
+
+    public static Vector2 ClampPosition(Vector2 position, Vector2 size, Vector2 viewportPosition, Vector2 viewportSize) =>
+        Vector2.Clamp(position, viewportPosition, viewportPosition + Vector2.Max(Vector2.Zero, viewportSize - size));
+
     public static int Layer(CanvasItem item) => item.Kind switch
     {
         CanvasItemKind.Zone => 0,

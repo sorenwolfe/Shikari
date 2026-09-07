@@ -66,6 +66,18 @@ public static class ReplayTests
         Check(ReplayPlayback.Trail(change, 0.2f, 0).Count == 1, "Trails do not connect different people");
         Check(ReplayPlayback.FrameAt(change, float.NaN) == null, "Invalid playback time unavailable");
         Check(ReplayValidation.IsValid(attempt), "Valid recording accepted");
+        attempt.Plan.Slides[0].ArenaOverride = new ArenaSettings { Shape = ArenaShape.Rectangle, AspectRatio = 2 };
+        Check(attempt.Version == 2, "Per-board replay snapshots must reject readers that silently ignore arena overrides");
+        Check(ReplayValidation.IsValid(attempt), "Current reader must accept the new replay envelope");
+        attempt.Plan.Slides[0].ArenaOverride!.GridDivisions = int.MaxValue;
+        Check(!ReplayValidation.IsValid(attempt), "Replay must reject unbounded per-slide arena rendering");
+        attempt.Plan.Slides[0].ArenaOverride!.GridDivisions = 8;
+        attempt.Plan.StrategyEvidence.Add(new StrategyEvidenceAttachment { Key = "damaged", Mechanics = new() { new() { CastTime = float.NaN } } });
+        Check(!ReplayValidation.IsValid(attempt), "Replay must validate attached strategy evidence");
+        attempt.Plan.StrategyEvidence.Clear();
+        attempt.Plan.FormatVersion = PlanDocument.CurrentFormatVersion + 1;
+        Check(!ReplayValidation.IsValid(attempt), "Replay must reject unsupported embedded plan versions");
+        attempt.Plan.FormatVersion = 1;
         attempt.Frames[1].Time = -1;
         Check(!ReplayValidation.IsValid(attempt), "Negative stored time rejected");
         attempt.Frames[1].Time = 0;

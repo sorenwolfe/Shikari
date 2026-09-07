@@ -12,6 +12,8 @@ public sealed partial class ArenaCanvas
 {
     /// <summary>Screen-sized markers and a clear foreground for the combat mini window.</summary>
     public bool MiniPresentation { get; set; }
+    /// <summary>Remove other player markers and captions, preserving mechanic geometry.</summary>
+    public bool MiniYourView { get; set; }
     private const uint MiniTarget = 0xFFFFDE70;
     private const uint MiniArrived = 0xFFA2ED80;
     private const uint MiniInk = 0xFF171310;
@@ -51,6 +53,7 @@ public sealed partial class ArenaCanvas
     }
     private void DrawMiniToken(ImDrawListPtr draw, PlanDocument plan, CanvasItem item, Vector2 at)
     {
+        if (MiniYourView && (HighlightSlot < 0 || item.SlotIndex != HighlightSlot)) return;
         var color = item.Color | 0xFF000000;
         if (item.SlotIndex >= 0 && item.SlotIndex < plan.Roster.Count)
         {
@@ -71,6 +74,7 @@ public sealed partial class ArenaCanvas
         if (LivePlayers == null) return;
         foreach (var player in LivePlayers.OrderBy(p => p.IsLocal))
         {
+            if (MiniYourView && !player.IsLocal) continue;
             var at = ToScreen(player.Board);
             // An off-board position must not masquerade as a clamped position inside the arena.
             if (player.Board.X < 0 || player.Board.X > 1 || player.Board.Y < 0 || player.Board.Y > 1) continue;

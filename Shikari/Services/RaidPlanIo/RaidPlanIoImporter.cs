@@ -34,6 +34,8 @@ public sealed class RaidPlanIoReport
 
     public List<string> Notes { get; } = new();
 
+    internal Dictionary<string, int> Unsupported { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     public string Summary()
     {
         var text = $"{Slides} slide(s), {Items} object(s), {TimelineSteps} timeline step(s).";
@@ -47,7 +49,7 @@ public sealed class RaidPlanIoReport
         if (NotesMoved > 0)
             text += $" {NotesMoved} text box(es) became slide notes.";
 
-        var dropped = Skipped.Where(p => !p.Key.Equals("arena", StringComparison.OrdinalIgnoreCase))
+        var dropped = Skipped.Where(p => p.Key.ToLowerInvariant() is not ("arena" or "itext" or "emoji"))
             .Sum(p => p.Value);
         if (dropped > 0)
             text += $" {dropped} object(s) had no equivalent and were left out.";
@@ -168,7 +170,7 @@ public static class RaidPlanIoImporter
 
         foreach (var step in steps)
         {
-            var slide = new Slide { Title = $"Step {step + 1}" };
+            var slide = new Slide { Title = $"Step {step + 1}", SourceStep = step };
             doc.Slides.Add(slide);
             slideByStep[step] = slide;
         }
@@ -180,6 +182,15 @@ public static class RaidPlanIoImporter
         {
             if (!slideByStep.TryGetValue(node.Step, out var slide))
                 continue;
+
+            var marker = AbilityMarker(node, frame, report);
+            if (marker != null)
+            {
+                slide.Items.AddRange(marker);
+                Bump(report.ByType, node.Type);
+                report.Items += marker.Count;
+                continue;
+            }
 
             var item = Translate(node, frame, doc, seatLookup, bound, report);
             if (item == null)
@@ -194,6 +205,9 @@ public static class RaidPlanIoImporter
         }
 
         ApplySlideNotes(parsed, slideByStep, report);
+
+        foreach (var pair in report.Unsupported)
+            report.Notes.Add($"Unsupported {pair.Key}: {pair.Value} object(s) left out.");
 
         report.Slides = doc.Slides.Count;
         report.SeatsBound = bound.Count;
@@ -265,6 +279,57 @@ public static class RaidPlanIoImporter
 
     // ---------------------------------------------------------------- translation
 
+    private static List<CanvasItem>? AbilityMarker(Node node, PlanFrame frame, RaidPlanIoReport report)
+    {
+        if (node.Type != "ability") return null;
+        var id = node.AbilityId?.ToLowerInvariant();
+        if (id is not ("ff-area-prox" or "ff-knock")) return null;
+        var items = new List<CanvasItem>();
+        string note;
+        if (id == "ff-area-prox")
+        {
+            // Source SVG: an r50/r37.5 gradient ring and an r8 dot in a 100px viewbox.
+            // The editor has solid zones, so retain the boundary and dot without claiming
+            // that the transparent part of the source proximity marker is a safe zone.
+            var ring = Zone(node, frame, ZoneShape.Donut);
+            ring.InnerRadius = ring.Radius * 0.75f;
+            ring.Color = node.OpacityColour("colorB", node.Colour("colorA", 0x80FFFFFF));
+            items.Add(ring);
+            var dot = Zone(node, frame, ZoneShape.Circle);
+            dot.Radius = frame.Length(node.Width * 0.08f);
+            items.Add(dot);
+            note = "Proximity markers (Prox) simplified to an editable boundary ring and center dot; the source gradient is omitted. The ring's interior does not indicate safety.";
+        }
+        else
+        {
+            // Source SVG: eight pairs of outward chevrons. Keep the outer tips at r45
+            // and shorten each arrow into the original chevron band rather than implying
+            // a measured travel path starting at the origin.
+            for (var direction = 0; direction < 8; direction++)
+            {
+                var radians = direction * MathF.PI / 4f;
+                var vector = new Vector2(MathF.Sin(radians) * node.Width, -MathF.Cos(radians) * node.Height);
+                var tail = node.Position + Rotate(vector * 0.28f, node.Angle);
+                var head = node.Position + Rotate(vector * 0.45f, node.Angle);
+                var arrow = Base(node, frame, CanvasItemKind.Arrow);
+                arrow.Color = node.AreaColour();
+                arrow.Points = new List<Vector2> { frame.Normalise(tail.X, tail.Y), frame.Normalise(head.X, head.Y) };
+                items.Add(arrow);
+            }
+            note = "Knockback markers (KB) simplified to eight editable outward arrows; paired chevrons and the second color are omitted. Arrow length is marker artwork, not a measured knockback distance.";
+        }
+        var label = Base(node, frame, CanvasItemKind.Label);
+        label.Text = id == "ff-area-prox" ? "Prox" : "KB";
+        if (id == "ff-area-prox")
+        {
+            var position = node.Position + new Vector2(0, node.Height * 0.18f);
+            label.Position = frame.Normalise(position.X, position.Y);
+        }
+        items.Add(label);
+        if (!report.Notes.Contains(note)) report.Notes.Add(note);
+        return items;
+    }
+
     private static CanvasItem? Translate(
         Node node, PlanFrame frame, PlanDocument doc, Dictionary<string, int> seats,
         HashSet<int> bound, RaidPlanIoReport report)
@@ -297,10 +362,16 @@ public static class RaidPlanIoImporter
             case "arrow":
                 return Arrow(node, frame);
 
+            case "path":
+                var path = RaidPlanPath.Translate(node.Source, frame);
+                if (path == null) Bump(report.Unsupported, "path geometry");
+                return path;
+
             case "ability":
                 return Ability(node, frame, report);
 
             default:
+                Bump(report.Unsupported, "object type '" + node.Type + "'");
                 return null;
         }
     }
@@ -356,7 +427,7 @@ public static class RaidPlanIoImporter
     {
         var item = Base(node, frame, CanvasItemKind.Zone);
         item.Zone = shape;
-        item.Color = node.Colour("fill", 0x80FFFFFF);
+        item.Color = node.AreaColour();
         item.Rotation = node.Angle;
         item.Radius = frame.Length(node.Width * 0.5f);
         item.Extent = new Vector2(frame.Length(node.Width * 0.5f), frame.Length(node.Height * 0.5f));
@@ -370,7 +441,7 @@ public static class RaidPlanIoImporter
         // opposite way to the triangle's own rotation.
         var item = Base(node, frame, CanvasItemKind.Zone);
         item.Zone = ZoneShape.Cone;
-        item.Color = node.Colour("fill", 0x80FFFFFF);
+        item.Color = node.AreaColour();
         item.ConeAngle = sweep;
         item.Radius = frame.Length(node.Height);
 
@@ -412,10 +483,13 @@ public static class RaidPlanIoImporter
                 return item;
             }
 
+            // Source 100x100 SVGs: ff-ring has outer radius 50 and inner 47.5;
+            // ff-donut has outer 50 and inner 25. See tests/raidplan-source-notes.md.
+            case "ff-ring":
             case "ff-donut":
             {
                 var item = Zone(node, frame, ZoneShape.Donut);
-                item.InnerRadius = item.Radius * 0.5f;
+                item.InnerRadius = item.Radius * (node.AbilityId?.Equals("ff-ring", StringComparison.OrdinalIgnoreCase) == true ? 0.95f : 0.5f);
                 return item;
             }
 
@@ -425,6 +499,7 @@ public static class RaidPlanIoImporter
             // A stack marker is a circle you gather in. The zone shape carries that; the caption
             // does not, because zones never draw one.
             case "ff-stack":
+            case "ff-circle":
                 return Zone(node, frame, ZoneShape.Circle);
 
             case "ff-pie":
@@ -437,7 +512,7 @@ public static class RaidPlanIoImporter
                 return Arrow(node, frame);
 
             default:
-                report.Notes.Add("Unknown area type '" + node.AbilityId + "' was left out.");
+                Bump(report.Unsupported, "area type '" + node.AbilityId + "'");
                 return null;
         }
     }
@@ -600,7 +675,19 @@ public static class RaidPlanIoImporter
 
         private JObject Attr { get; init; } = new();
 
+        internal JObject Source { get; init; } = new();
+
         public uint Colour(string key, uint fallback) => ParseColour(Attr.Value<string>(key), fallback);
+
+        public uint AreaColour() => OpacityColour(Type == "ability" ? "colorA" : "fill", 0x80FFFFFF);
+
+        public uint OpacityColour(string key, uint fallback)
+        {
+            var color = Colour(key, fallback);
+            var opacity = Attr.Value<float?>("opacity") ?? 1f;
+            var alpha = (uint)MathF.Round((color >> 24) * (float.IsFinite(opacity) ? Math.Clamp(opacity, 0f, 1f) : 1f));
+            return (color & 0x00FFFFFF) | (alpha << 24);
+        }
 
         public static Node? From(JObject node)
         {
@@ -617,16 +704,26 @@ public static class RaidPlanIoImporter
 
             var scaleX = scale?.Value<float?>("x") ?? 1f;
             var scaleY = scale?.Value<float?>("y") ?? 1f;
+            var width = (size?.Value<float?>("w") ?? (type == "ability" ? 100f : 0f)) * MathF.Abs(scaleX);
+            var height = (size?.Value<float?>("h") ?? (type == "ability" ? 100f : 0f)) * MathF.Abs(scaleY);
+            var angle = meta.Value<float?>("angle") ?? 0f;
+            var position = new Vector2(pos?.Value<float?>("x") ?? 0f, pos?.Value<float?>("y") ?? 0f);
+            var origin = meta["origin"] as JObject;
+            // Fabric saves the anchor, not necessarily the center. Its screen rotation is
+            // clockwise, just like our rectangles; rotate the anchor-to-center offset too.
+            var offset = new Vector2(OriginOffset(origin?["x"], "left", "right") * width,
+                OriginOffset(origin?["y"], "top", "bottom") * height);
+            position += Rotate(offset, angle);
 
             return new Node
             {
                 Type = type,
                 Step = meta.Value<int?>("step") ?? 0,
                 HasPosition = pos != null,
-                Position = new Vector2(pos?.Value<float?>("x") ?? 0f, pos?.Value<float?>("y") ?? 0f),
-                Width = (size?.Value<float?>("w") ?? 0f) * scaleX,
-                Height = (size?.Value<float?>("h") ?? 0f) * scaleY,
-                Angle = meta.Value<float?>("angle") ?? 0f,
+                Position = position,
+                Width = width,
+                Height = height,
+                Angle = angle,
                 Text = attr.Value<string>("text"),
                 WayId = attr.Value<string>("wayId"),
                 AbilityId = attr.Value<string>("abilityId"),
@@ -634,8 +731,13 @@ public static class RaidPlanIoImporter
                 ArenaImageUrl = attr.Value<string>("imageUrl"),
                 Asset = attr.Value<string>("asset"),
                 Attr = attr,
+                Source = node,
             };
         }
+
+        private static float OriginOffset(JToken? origin, string start, string end) => origin?.Type is JTokenType.Float or JTokenType.Integer
+            ? 0.5f - origin.Value<float>()
+            : origin?.Value<string>() == start ? 0.5f : origin?.Value<string>() == end ? -0.5f : 0f;
     }
 
     /// <summary>

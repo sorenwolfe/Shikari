@@ -39,6 +39,7 @@ namespace Shikari
         public static FakeMain Main { get; } = new();
         public static FakeLog Log { get; } = new();
         public static FakeAdaptive Adaptive { get; } = new();
+        public static FakeActions Actions { get; } = new();
     }
     public sealed class FakeAdaptive
     {
@@ -52,7 +53,15 @@ namespace Shikari
     }
     public sealed class FakeInterface { public string Directory = ""; public string GetPluginConfigDirectory() => Directory; }
     public sealed class FakeConfig { public bool ReplayEnabled = true; public int ReplayRetention = 10; }
-    public sealed class FakePlans { public PlanDocument? Active = PlanDocument.CreateDefault(); }
+    public sealed class FakePlans
+    {
+        public PlanDocument? Active = PlanDocument.CreateDefault();
+        public int Saves;
+        public bool SaveSucceeds = true;
+        public bool SaveActive() { Saves++; return SaveSucceeds; }
+    }
+    public sealed class FakeActions { public FakeAction Get(uint id) => new(); }
+    public sealed class FakeAction { public string Name => "Observed cast"; }
     public sealed class FakeRoster { public int ResolveLocalSlot(PlanDocument p) => 0; }
     public sealed class FakeMain { public int SlideIndex = 0; }
     public sealed class FakeLog { public void Warning(Exception e, string message) { } }
@@ -105,6 +114,11 @@ namespace Shikari.Tests
                 Check(attempt.Frames.Count == 2, "Framework records positions without UI");
                 Check(attempt.Mechanics.Count == 1, "Cast anchor recorded");
                 Check(attempt.StatusObservations.Count == 1 && attempt.AdaptiveDecisions.Count == 1, "Adaptive evidence recorded");
+                Check(plan.StrategyEvidence.Count == 1 && plan.StrategyEvidence[0].Key == "local:" + attempt.Id,
+                    "A completed pull must attach its evidence automatically to the active strategy");
+                Check(plan.StrategyEvidence[0].Mechanics.Count == 1 && plan.StrategyEvidence[0].Mechanics[0].EntryId == plan.Timeline[0].Id,
+                    "Automatic evidence must reference the authored timeline entry");
+                Check(Plugin.Plans.Saves == 1, "Completed-pull enrichment must persist once despite duplicate wipe signals");
                 id = attempt.Id;
             }
             Check(System.IO.File.Exists(System.IO.Path.Combine(directory, "replays", id + ".json")), "Replay persisted");
@@ -113,13 +127,42 @@ namespace Shikari.Tests
                 for (int i = 0; i < 100 && store.Attempts.Count == 0; i++) { Thread.Sleep(10); Plugin.Framework.Tick(); }
                 Check(store.Attempts.Count == 1, "Persisted replay loads");
                 Check(store.Attempts[0].StatusObservations.Count == 1 && store.Attempts[0].AdaptiveDecisions[0].Reason == "Long duration", "Adaptive evidence survives disk reload");
-                Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.ClientState.Change();
+                var evidenceCount = plan.StrategyEvidence.Count;
+                var saveCount = Plugin.Plans.Saves;
+                Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); Plugin.ClientState.Change();
                 Check(!store.Recording && store.Attempts.Count == 2, "Zone change closes recording");
+                Check(plan.StrategyEvidence.Count == evidenceCount && Plugin.Plans.Saves == saveCount, "Zone changes must not auto-enrich the strategy");
+
+                Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast();
+                var replacement = PlanDocument.CreateDefault(); Plugin.Plans.Active = replacement;
+                Plugin.Encounter.End();
+                Check(plan.StrategyEvidence.Count == evidenceCount && replacement.StrategyEvidence.Count == 0 && Plugin.Plans.Saves == saveCount,
+                    "Changing active strategy during a pull must prevent enrichment of either plan");
+
+                // An unconfigured cast reaches the real action-name lookup and timeline inference.
+                replacement.Slides[0].Title = "Observed cast";
+                Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); Plugin.Encounter.End();
+                Check(replacement.StrategyEvidence.Count == 1 && replacement.Timeline.Count == 1 && replacement.Timeline[0].CastActionId == 123,
+                    "Completed local pull must infer a matching untimed board from its observed cast name");
+                Check(!replacement.Timeline[0].Enabled, "Inferred local timeline instructions must stay disabled for review");
+                evidenceCount = replacement.StrategyEvidence.Count; saveCount = Plugin.Plans.Saves;
+                Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); replacement.Notes = "Edited during pull"; Plugin.Encounter.End();
+                Check(replacement.StrategyEvidence.Count == evidenceCount && Plugin.Plans.Saves == saveCount,
+                    "Editing the active strategy during a pull must reject stale automatic evidence");
+                Plugin.Plans.SaveSucceeds = false;
+                Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); Plugin.Encounter.End();
+                Check(replacement.StrategyEvidence.Count == evidenceCount && Plugin.Plans.Saves == saveCount + 1,
+                    "A failed strategy save must roll back automatic enrichment without discarding the replay");
+                Plugin.Plans.SaveSucceeds = true; saveCount = Plugin.Plans.Saves;
+                Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); store.Dispose();
+                Check(replacement.StrategyEvidence.Count == evidenceCount && Plugin.Plans.Saves == saveCount,
+                    "Plugin unload must save the recording without automatic strategy enrichment");
                 store.Clear();
                 Check(store.Attempts.Count == 0, "Clear removes attempts");
             }
             Check(System.IO.Directory.GetFiles(System.IO.Path.Combine(directory, "replays"), "*.json").Length == 0, "Clear persists");
             Console.WriteLine("PASS: recording lifecycle, duplicate end, cast anchoring, persistence, reload, zone change, clear");
+            Console.WriteLine("PASS: automatic completed-pull evidence, action-name inference, persistence, changed-plan rejection, save rollback and zone/unload skips");
         }
     }
 }

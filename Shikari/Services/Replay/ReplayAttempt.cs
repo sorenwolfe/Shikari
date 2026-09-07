@@ -9,7 +9,13 @@ namespace Shikari.Services.Replay;
 /// <summary>A self-contained local recording; never rendered against a subsequently edited plan.</summary>
 public sealed class ReplayAttempt
 {
-    public int Version { get; set; } = 1;
+    private int version = 1;
+    /// <summary>Version 2 protects per-board geometry and evidence from older replay readers.</summary>
+    public int Version
+    {
+        get => Plan?.FormatVersion >= 4 ? Math.Max(2, version) : version;
+        set => version = value;
+    }
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public DateTime StartedUtc { get; set; }
     public PlanDocument Plan { get; set; } = new();

@@ -36,4 +36,5 @@ public sealed class WtfDigSelection
 }
 
 public sealed record WtfDigBoardLink(string Label, string Url, string Code);
+public sealed record WtfDigBoardReference(string SlideId, string Url, string Code);
 public sealed record WtfDigVariant(string Key, IReadOnlyList<string> Choices);

@@ -142,6 +142,10 @@ public static class ShareCode
 
     private static void ValidateStructure(PlanDocument plan)
     {
+        if (!StrategyEvidenceValidation.IsValid(plan))
+            throw new InvalidDataException("Invalid or oversized strategy evidence.");
+        if (plan.Arena != null && !SlideMetadataValidation.ValidArena(plan.Arena))
+            throw new InvalidDataException("Invalid arena settings.");
         if ((plan.AdaptiveMechanics?.Count ?? 0) > 128 ||
             plan.AdaptiveMechanics?.Any(r => r == null || r.Branches == null || r.Branches.Count > 16 ||
                 r.Branches.Any(b => b == null || b.AdditionalStatuses == null || b.AdditionalStatuses.Count > 3 ||
@@ -157,6 +161,8 @@ public static class ShareCode
             foreach (var slide in plan.Slides)
             {
                 if (slide == null) throw new InvalidDataException("The plan contains an empty slide entry.");
+                if (!SlideMetadataValidation.IsValid(slide))
+                    throw new InvalidDataException("Invalid slide arena or source metadata.");
                 items += slide.Items?.Count ?? 0;
                 if (slide.Items == null) continue;
                 foreach (var item in slide.Items)

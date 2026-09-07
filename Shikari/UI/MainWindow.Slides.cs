@@ -794,7 +794,7 @@ public sealed partial class MainWindow
         DrawBackdropSettings();
         ImGui.Spacing();
 
-        var arena = plan.Arena;
+        var arena = CurrentSlide?.ArenaOverride ?? plan.Arena;
 
         ImGui.SetNextItemWidth(-1);
         if (ImGui.BeginCombo("##arena-shape", arena.Shape.ToString(), ImGuiComboFlags.None))

@@ -185,6 +185,7 @@ public sealed partial class MainWindow
         plan.Notes = restored.Notes; plan.Arena = restored.Arena; plan.Roster = restored.Roster;
         plan.Slides = restored.Slides; plan.Timeline = restored.Timeline;
         plan.AdaptiveMechanics = restored.AdaptiveMechanics;
+        plan.StrategyEvidence = restored.StrategyEvidence;
         plan.FormatVersion = restored.FormatVersion;
         canvas.Select(null); dirty = true; pendingBefore = null;
         frameBefore = JsonConvert.SerializeObject(plan);

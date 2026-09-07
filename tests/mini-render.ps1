@@ -6,5 +6,6 @@ $sources += "$root/Shikari/UI/MiniMapLayout.cs", "$root/Shikari/Services/Live/St
 $refs = @(Get-ChildItem "$PSHOME/ref/*.dll" | ForEach-Object FullName) + "$PSHOME/Newtonsoft.Json.dll", "$PSHOME/System.Drawing.Common.dll", "$PSHOME/System.Private.Windows.GdiPlus.dll", "$PSHOME/System.Private.Windows.Core.dll"
 Add-Type -Path $sources -ReferencedAssemblies $refs -CompilerOptions '/nullable:enable','/nowarn:1701'
 [Shikari.UI.ArenaCanvas]::CheckArrival()
+[Shikari.UI.ArenaCanvas]::CheckPersonalView()
 [Shikari.UI.ArenaCanvas]::Render($OutputPath)
 Write-Host "Renderer preview (synthetic positions, drawing API substitute): $OutputPath"

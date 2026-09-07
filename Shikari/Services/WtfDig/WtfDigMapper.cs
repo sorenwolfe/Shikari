@@ -14,6 +14,7 @@ public sealed class WtfDigPreview
     public PlanDocument Plan { get; } = PlanDocument.CreateDefault();
     public List<string> Warnings { get; } = new();
     public List<WtfDigBoardLink> Links { get; } = new();
+    public List<WtfDigBoardReference> BoardReferences { get; } = new();
     public List<WtfDigVariant> MissingVariants { get; } = new();
     public List<WtfDigVariant> VariantChoices { get; } = new();
     public Dictionary<string, string> ImageReferences { get; } = new();
@@ -64,7 +65,7 @@ public static class WtfDigMapper
                 plan.Timeline.Add(new TimelineEntry { Label = label, Trigger = TriggerKind.CombatTime, TimeSeconds = time, SortTime = time, Enabled = false });
             }
         }
-        Warn("Guide slides contain instructions and image references, not calibrated player positions. Use a linked raidplan to import editable diagrams.");
+        if (preview.Links.Count == 0) Warn("This guide has no linked editable boards; its notes and reference images are retained.");
         if (plan.Timeline.Count > 0) Warn("Imported timeline entries are disabled and unlinked until their timing and slide associations are verified.");
         plan.Notes += "\nVariants: " + string.Join(", ", selection.Variants.Select(v => v.Key + "=" + v.Value));
         plan.Notes += "\nConversion notes:\n" + string.Join("\n", preview.Warnings);
@@ -82,6 +83,16 @@ public static class WtfDigMapper
             if (selection.Variants.TryGetValue(key, out var selected) && variants[selected] != null) return Checked(variants[selected]);
             if (variants.Count == 1) return Checked(variants.Properties().First().Value);
             if (variants[selection.Strategy] != null) return Checked(variants[selection.Strategy]);
+            // The site's strategy-specific defaults override its general toggle defaults.
+            var phaseKey = Regex.Replace(key.Split('/')[0].ToLowerInvariant(), "[^a-z0-9]", "");
+            foreach (var toggle in (guide.Config["toggles"] as JArray ?? new JArray()).OfType<JObject>())
+            {
+                var toggleKey = (string?)toggle["key"] ?? "";
+                if (toggleKey.Length == 0 || !phaseKey.StartsWith(toggleKey, StringComparison.OrdinalIgnoreCase)) continue;
+                var choice = selection.Variants.GetValueOrDefault("toggle/" + toggleKey,
+                    (string?)guide.Config["strats"]?[selection.Strategy]?["defaults"]?[toggleKey] ?? (string?)toggle["defaultValue"] ?? "");
+                if (variants[choice] != null) return Checked(variants[choice]);
+            }
             preview.MissingVariants.Add(new WtfDigVariant(key, variants.Properties().Select(p => p.Name).ToArray()));
             return null;
 
@@ -99,11 +110,11 @@ public static class WtfDigMapper
         }
         void AddSlide(JObject node, string title, string key, string phaseNotes)
         {
-            var slide = new Slide { Title = title };
+            var slide = new Slide { Title = title, SourceUrl = guide.Link.Url, GuideUrl = guide.Link.Url, SourceLabel = title };
             var notes = new List<string> { phaseNotes };
             foreach (var field in new[] { "description", "action", "notes" }) notes.Add(Text(node[field], key + "/" + field));
             var image = Text(node["imageUrl"], key + "/image");
-            AddLinks(node["url"], title, preview);
+            AddLinks(node["url"], title, preview, slide.Id);
             if (node["strats"] is JArray roleStrats)
             {
                 foreach (var role in roleStrats.OfType<JObject>())
@@ -144,16 +155,18 @@ public static class WtfDigMapper
         }
     }
 
-    private static void AddLinks(JToken? value, string label, WtfDigPreview preview)
+    private static void AddLinks(JToken? value, string label, WtfDigPreview preview, string slideId = "")
     {
         if (value == null || LiteralData.IsUnsupported(value)) return;
-        if (value is JObject obj) { foreach (var p in obj.Properties()) AddLinks(p.Value, label + " / " + p.Name, preview); return; }
-        if (value is JArray array) { foreach (var item in array) AddLinks(item, label, preview); return; }
+        if (value is JObject obj) { foreach (var p in obj.Properties()) AddLinks(p.Value, label + " / " + p.Name, preview, slideId); return; }
+        if (value is JArray array) { foreach (var item in array) AddLinks(item, label, preview, slideId); return; }
         if (value.Type != JTokenType.String || !Uri.TryCreate(value.ToString(), UriKind.Absolute, out var uri) ||
             uri.Scheme != "https" || uri.Host != "raidplan.io" || !uri.IsDefaultPort || uri.UserInfo.Length > 0) return;
         var parsed = PlanUrlParser.Parse(uri.AbsoluteUri);
         if (parsed.IsValid && !preview.Links.Any(l => l.Code == parsed.Code))
             preview.Links.Add(new WtfDigBoardLink(label, uri.AbsoluteUri, parsed.Code));
+        if (parsed.IsValid && slideId.Length > 0)
+            preview.BoardReferences.Add(new WtfDigBoardReference(slideId, uri.AbsoluteUri, parsed.Code));
     }
     private static string Plain(string text) => WebUtility.HtmlDecode(Regex.Replace(text, "<[^>]{0,1000}>", "", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)));
 }

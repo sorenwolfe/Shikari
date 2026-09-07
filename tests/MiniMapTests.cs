@@ -10,6 +10,18 @@ public static class MiniMapTests
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
     public static void Run()
     {
+        // Dropping the viewport cap used to let long notes cover controls below the screen.
+        var compact = MiniMapLayout.FitWindow(640, 900, new Vector2(800, 600));
+        Check(compact.X <= 800 && compact.Y <= 600 && compact.Y > compact.X, "Board plus scrollable footer must fit the viewport");
+        var normal = MiniMapLayout.FitWindow(220, 100, new Vector2(1920, 1080));
+        Check(normal == new Vector2(220, 320), "Ordinary mini dimensions should stay unchanged");
+        foreach (var viewport in new[] { new Vector2(320, 240), new Vector2(160, 160), new Vector2(800, 300) })
+        {
+            var fit = MiniMapLayout.FitWindow(640, 2000, viewport);
+            Check(fit.X > 0 && fit.Y > fit.X && fit.X <= viewport.X && fit.Y <= viewport.Y, "Oversized mini must fit even at high UI scale");
+            var pos = MiniMapLayout.ClampPosition(new Vector2(3000, -100), fit, new Vector2(40, 50), viewport);
+            Check(pos.X >= 40 && pos.Y >= 50 && pos.X + fit.X <= 40 + viewport.X && pos.Y + fit.Y <= 50 + viewport.Y, "Off-screen anchors must leave the entire panel reachable");
+        }
         var plan = PlanDocument.CreateDefault();
         var slide = plan.Slides[0];
         slide.Items.Clear();

@@ -9,6 +9,7 @@ using Shikari.Model;
 using Shikari.Services;
 using Shikari.Services.FfLogs;
 using Shikari.Services.RaidPlanIo;
+using Shikari.Services.Replay;
 using Shikari.UI.Theme;
 
 namespace Shikari.UI;
@@ -96,6 +97,8 @@ public sealed partial class MainWindow
         loadedFight = null;
         wtfGuide = null;
         wtfPreview = null;
+        wtfAutoImport = false;
+        wtfDetails.Clear();
         wtfStatus = importStatusLine = importDetail = planFileStatus = importStatus = string.Empty;
         importFailed = planFileFailed = importStatusIsError = wtfError = false;
         replaceSharedPlan = false;
@@ -172,7 +175,7 @@ public sealed partial class MainWindow
             }
 
             ImGui.BeginDisabled(importBusy || selectedFight < 0);
-            if (ImGui.Button("Fetch this fight", Vector2.Zero))
+            if (ImGui.Button("Enrich this strategy", Vector2.Zero))
                 LoadFightData();
             ImGui.EndDisabled();
         }
@@ -342,9 +345,11 @@ public sealed partial class MainWindow
         ImGui.TextDisabled("What's in this pull");
         ImGui.Separator();
 
-        if (ImGui.Button("Review this pull with this plan")) LoadLogReview(plan, data);
-        ImGui.TextDisabled("Compare recorded statuses and movement with this strategy in Review.");
+        if (ImGui.Button("Open pull in Review")) workspace = 2;
+        ImGui.TextWrapped("Cast matches and observed statuses are attached to this strategy. Review shows the recording and any unresolved alignment or assignments.");
         ImGui.Spacing();
+        DrawStrategyEvidence(plan);
+        if (!ImGui.TreeNode("Advanced: build additional timeline and cooldown entries")) return;
         var players = data.Actors.Where(a => a.IsPlayer).ToList();
         ImGui.TextUnformatted(
             $"{data.EnemyCasts.Count} boss casts, {data.PlayerCasts.Count} player casts, {players.Count} players.");
@@ -433,6 +438,7 @@ public sealed partial class MainWindow
         UiHelpers.HelpMarker(
             "Steps already on your timeline are left alone, so importing a second pull only fills " +
             "in what's missing. Assignments are added, never removed.");
+        ImGui.TreePop();
     }
 
     private static List<SeatJob> BuildSeatJobs(PlanDocument plan)
@@ -460,10 +466,25 @@ public sealed partial class MainWindow
         Plugin.Config.LastReportUrl = reportInput.Trim();
         Plugin.SaveConfig();
 
+        var session = Plan == null ? null : new StrategyMergeSession(Plan);
+        var clientId = Plugin.Config.FfLogsClientId;
+        var clientSecret = Plugin.Config.FfLogsClientSecret;
+
         Run(async cancel =>
         {
             var list = await Plugin.FfLogs.GetFightsAsync(
-                Plugin.Config.FfLogsClientId, Plugin.Config.FfLogsClientSecret, parsed.Code, cancel);
+                clientId, clientSecret, parsed.Code, cancel);
+            var requested = parsed.FightId == ReportUrl.LastFight ? list.LastOrDefault() :
+                parsed.FightId is { } id ? list.FirstOrDefault(f => f.Id == id) : null;
+            if (parsed.FightId.HasValue && requested == null)
+                throw new InvalidOperationException("That fight was not found in this report.");
+            LogFightData? data = null;
+            LogEvidence? evidence = null;
+            if (requested != null && session != null)
+            {
+                data = await Plugin.FfLogs.GetFightDataAsync(clientId, clientSecret, parsed.Code, requested, cancel);
+                evidence = await Plugin.FfLogs.GetEvidenceAsync(clientId, clientSecret, parsed.Code, requested, cancel);
+            }
 
             return () =>
             {
@@ -481,6 +502,11 @@ public sealed partial class MainWindow
 
                 importStatusLine = $"Found {list.Count} fight(s).";
                 importFailed = false;
+                if (data != null && evidence != null && session != null)
+                {
+                    ApplyLogReference(session, data, evidence);
+                    loadedFight = importFailed ? null : data;
+                }
             };
         });
     }
@@ -492,17 +518,21 @@ public sealed partial class MainWindow
             return;
 
         var fight = fights[selectedFight];
+        if (Plan == null) return;
+        var session = new StrategyMergeSession(Plan);
+        var clientId = Plugin.Config.FfLogsClientId;
+        var clientSecret = Plugin.Config.FfLogsClientSecret;
 
         Run(async cancel =>
         {
             var data = await Plugin.FfLogs.GetFightDataAsync(
-                Plugin.Config.FfLogsClientId, Plugin.Config.FfLogsClientSecret, parsed.Code, fight, cancel);
+                clientId, clientSecret, parsed.Code, fight, cancel);
+            var evidence = await Plugin.FfLogs.GetEvidenceAsync(clientId, clientSecret, parsed.Code, fight, cancel);
 
             return () =>
             {
-                loadedFight = data;
-                importStatusLine = $"Loaded {fight.Name}.";
-                importFailed = false;
+                ApplyLogReference(session, data, evidence);
+                loadedFight = importFailed ? null : data;
             };
         });
     }

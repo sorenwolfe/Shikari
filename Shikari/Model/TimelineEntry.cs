@@ -47,6 +47,14 @@ public sealed class TimelineEntry
     [DefaultValue(0u)]
     public uint CastActionId { get; set; }
 
+    /// <summary>Service-inferred anchor; name matching remains authoritative until its action is edited.</summary>
+    [DefaultValue(0u)]
+    public uint InferredCastActionId { get; set; }
+
+    /// <summary>This disabled row was created by matching an otherwise untimed imported board.</summary>
+    [DefaultValue(false)]
+    public bool EvidenceCreated { get; set; }
+
     /// <summary>Cached cast name, shown when the sheet lookup is unavailable.</summary>
     [DefaultValue("")]
     public string CastName { get; set; } = string.Empty;
@@ -121,6 +129,8 @@ public sealed class TimelineEntry
             Enabled = Enabled,
             Trigger = Trigger,
             CastActionId = CastActionId,
+            InferredCastActionId = InferredCastActionId,
+            EvidenceCreated = EvidenceCreated,
             CastName = CastName,
             Occurrence = Occurrence,
             TimeSeconds = TimeSeconds,

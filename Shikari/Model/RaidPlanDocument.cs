@@ -41,13 +41,16 @@ public sealed class ArenaSettings
 /// <summary>A complete strategy sheet: roster, slides and timeline.</summary>
 public sealed class PlanDocument
 {
-    public const int CurrentFormatVersion = 3;
+    public const int CurrentFormatVersion = 4;
 
     private int formatVersion = 1;
     [DefaultValue(1)]
     public int FormatVersion
     {
-        get => AdaptiveMechanics?.Any(r => r?.Branches?.Any(b => b?.AdditionalStatuses is { Count: > 0 }) == true) == true
+        get => StrategyEvidence is { Count: > 0 } || Timeline?.Any(e => e != null && (e.InferredCastActionId != 0 || e.EvidenceCreated)) == true || Slides?.Any(s => s != null &&
+                   (s.ArenaOverride != null || !string.IsNullOrEmpty(s.SourceUrl) || !string.IsNullOrEmpty(s.GuideUrl) || !string.IsNullOrEmpty(s.SourceLabel) || s.SourceStep >= 0)) == true
+            ? Math.Max(4, formatVersion)
+            : AdaptiveMechanics?.Any(r => r?.Branches?.Any(b => b?.AdditionalStatuses is { Count: > 0 }) == true) == true
             ? Math.Max(3, formatVersion) : AdaptiveMechanics is { Count: > 0 } ? Math.Max(2, formatVersion) : formatVersion;
         set => formatVersion = value;
     }
@@ -79,6 +82,9 @@ public sealed class PlanDocument
 
     public List<AdaptiveMechanic> AdaptiveMechanics { get; set; } = new();
     public bool ShouldSerializeAdaptiveMechanics() => AdaptiveMechanics.Count > 0;
+
+    public List<StrategyEvidenceAttachment> StrategyEvidence { get; set; } = new();
+    public bool ShouldSerializeStrategyEvidence() => StrategyEvidence is { Count: > 0 };
 
     public bool ShouldSerializeTimeline() => Timeline.Count > 0;
 

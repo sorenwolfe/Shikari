@@ -175,7 +175,7 @@ public sealed partial class ArenaCanvas
 
         miniLabels.Clear();
         DrawBackdrop(drawList, slide, boardSize);
-        DrawArenaBackground(drawList, plan.Arena, boardSize);
+        DrawArenaBackground(drawList, slide.ArenaOverride ?? plan.Arena, boardSize);
 
         var ordered = MiniPresentation
             ? slide.Items.OrderBy(MiniMapLayout.Layer).ThenBy(i => i.Layer)

@@ -229,6 +229,9 @@ public sealed class Configuration : IPluginConfiguration
     /// </remarks>
     public bool MiniPlanOnlyMe { get; set; } = true;
 
+    /// <summary>Hide other planned and observed players in the mini, keeping mechanics and your destinations.</summary>
+    public bool MiniPlanYourView { get; set; }
+
     /// <summary>How far you can be from your spot and still count as standing on it, in yalms.</summary>
     public float MiniPlanSettleYalms { get; set; } = 2.5f;
 

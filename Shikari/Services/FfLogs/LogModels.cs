@@ -6,6 +6,7 @@ namespace Shikari.Services.FfLogs;
 public sealed class LogFight
 {
     public int Id { get; init; }
+    public uint EncounterId { get; init; }
     public string Name { get; init; } = string.Empty;
     public long StartTime { get; init; }
     public long EndTime { get; init; }

@@ -13,6 +13,7 @@ public static class PlanNormaliser
     public static PlanDocument Normalise(PlanDocument doc)
     {
         doc.Arena ??= new ArenaSettings();
+        SlideMetadataValidation.NormaliseArena(doc.Arena);
         doc.Roster ??= new List<PlayerSlot>();
         doc.Slides ??= new List<Slide>();
         doc.Timeline ??= new List<TimelineEntry>();
@@ -43,6 +44,7 @@ public static class PlanNormaliser
 
         foreach (var slide in doc.Slides)
         {
+            SlideMetadataValidation.Normalise(slide, doc.Arena);
             slide.Items ??= new List<CanvasItem>();
             foreach (var item in slide.Items)
                 item.Points ??= new List<System.Numerics.Vector2>();
@@ -53,6 +55,8 @@ public static class PlanNormaliser
             entry.Assignments ??= new List<Assignment>();
             entry.SlotCallText ??= new Dictionary<int, string>();
         }
+
+        StrategyEvidenceValidation.Normalise(doc);
 
         return doc;
     }

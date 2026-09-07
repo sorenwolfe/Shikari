@@ -32,6 +32,7 @@ public static class WtfDigTests
         Check(guide.Strategies.Count == 1 && guide.Title == "Example encounter", "Read fight configuration and strategy");
         var options = new WtfDigSelection { Strategy = "toxic", Role = "Tank", Party = 2 };
         var preview = WtfDigMapper.Convert(guide, options);
+        Check(preview.Plan.Slides.All(s => s.GuideUrl == guide.Link.Url), "Original guide provenance remains separate from editable board URLs");
         Check(preview.Plan.Slides.Any(s => s.Notes.Contains("South")) && !preview.Plan.Slides.Any(s => s.Notes.Contains("North")), "Role/group isolation");
         Check(preview.Plan.Timeline.Count == 1 && !preview.Plan.Timeline[0].Enabled, "Imported timing stays disabled");
         Check(preview.Plan.AdaptiveMechanics.Count == 0, "Guide prose does not invent live rules");

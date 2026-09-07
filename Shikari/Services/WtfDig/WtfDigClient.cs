@@ -9,7 +9,7 @@ using Shikari.Model;
 namespace Shikari.Services.WtfDig;
 
 /// <summary>Explicit user-initiated requests only. Redirects and arbitrary source hosts are not followed.</summary>
-public sealed class WtfDigClient : IDisposable
+public sealed partial class WtfDigClient : IDisposable
 {
     private readonly HttpClient http;
     public WtfDigClient() : this(new HttpClientHandler { AllowAutoRedirect = false }) { }

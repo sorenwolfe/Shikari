@@ -139,6 +139,7 @@ public sealed class FfLogsClient : IDisposable
             report(code: "{{Escape(code)}}") {
               fights {
                 id
+                encounterID
                 name
                 startTime
                 endTime
@@ -159,6 +160,7 @@ public sealed class FfLogsClient : IDisposable
         return fights.Select(f => new LogFight
         {
             Id = f.Value<int?>("id") ?? 0,
+            EncounterId = (uint)Math.Max(0, f.Value<int?>("encounterID") ?? 0),
             Name = f.Value<string>("name") ?? "Fight",
             StartTime = f.Value<long?>("startTime") ?? 0,
             EndTime = f.Value<long?>("endTime") ?? 0,

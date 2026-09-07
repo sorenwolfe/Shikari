@@ -17,6 +17,7 @@ private static string Page(string rows, string next="null") => "{\"data\":{\"rep
 private sealed class Responses : HttpMessageHandler {
     private readonly Queue<string> pages;
     public bool RequireEvidenceQuery { get; init; } = true;
+    public bool RequireEncounterIdentity { get; init; }
     public Responses(params string[] pages) => this.pages = new(pages);
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancel) {
         cancel.ThrowIfCancellationRequested();
@@ -25,12 +26,20 @@ private sealed class Responses : HttpMessageHandler {
         else {
             var query = JObject.Parse(await request.Content!.ReadAsStringAsync(cancel)).Value<string>("query")!;
             if (RequireEvidenceQuery) Check(query.Contains("includeResources: true") && query.Contains("dataType: All"), "Evidence request must include resources and all event types");
+            if (RequireEncounterIdentity) Check(query.Contains("encounterID"), "Fight query must request source encounter identity");
             body=pages.Dequeue();
         }
         return new(HttpStatusCode.OK) { Content=new StringContent(body) };
     }
 }
 public static async Task Run() {
+    using (var client = new FfLogsClient(new Responses("""
+        {"data":{"reportData":{"report":{"fights":[{"id":30,"name":"Fixture","encounterID":1234,"startTime":10000,"endTime":20000}]}}}}
+        """) { RequireEvidenceQuery = false, RequireEncounterIdentity = true })) {
+        var fights = await client.GetFightsAsync("id", "secret", "code");
+        Check((uint?)typeof(LogFight).GetProperty("EncounterId")?.GetValue(fights.Single()) == 1234,
+            "Selected fight retains verified source encounter ID");
+    }
     using(var client=new FfLogsClient(new Responses(
         "{\"data\":{\"reportData\":{\"report\":{\"masterData\":{\"actors\":[],\"abilities\":[]}}}}}",
         Page("""

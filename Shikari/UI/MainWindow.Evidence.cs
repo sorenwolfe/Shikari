@@ -30,26 +30,63 @@ public sealed partial class MainWindow
 
     private void LoadLogReview(PlanDocument plan, LogFightData data)
     {
-        var frozen = new ReplayBuffer(plan, -1, DateTime.UtcNow).Attempt.Plan;
+        var session = new StrategyMergeSession(plan);
         Run(async cancel =>
         {
             var evidence = await Plugin.FfLogs.GetEvidenceAsync(Plugin.Config.FfLogsClientId,
                 Plugin.Config.FfLogsClientSecret, data.ReportCode, data.Fight, cancel);
             return () =>
             {
-                var statuses = Plugin.DataManager.GetExcelSheet<Status>();
-                var jobs = Plugin.DataManager.GetExcelSheet<ClassJob>();
-                var attempt = LogReplayBuilder.Build(frozen, data, evidence,
-                    id => statuses.GetRowOrDefault(id) is { } row && !string.IsNullOrEmpty(row.Name.ToString()),
-                    name => jobs.FirstOrDefault(j => LogImporter.SameJob(name, j.Name.ToString(), j.Abbreviation.ToString())).RowId);
-                Plugin.Replays.AddImported(attempt);
-                SelectReviewAttempt(attempt);
-                workspace = 2;
-                importStatusLine = "Pull attached to Review.";
-                importFailed = false;
+                ApplyLogReference(session, data, evidence);
             };
         });
         importStatusLine = "Reading this pull's statuses and movement…";
+    }
+
+    private void ApplyLogReference(StrategyMergeSession session, LogFightData data, LogEvidence evidence)
+    {
+        if (Plan == null || !session.Matches(Plan))
+            throw new InvalidOperationException("The strategy changed while the log was loading. Import again against the current plan.");
+        var statuses = Plugin.DataManager.GetExcelSheet<Status>();
+        var jobs = Plugin.DataManager.GetExcelSheet<ClassJob>();
+        var attempt = LogReplayBuilder.Build(session.Snapshot, data, evidence,
+            id => statuses.GetRowOrDefault(id) is { } row && !string.IsNullOrEmpty(row.Name.ToString()),
+            name => jobs.FirstOrDefault(j => LogImporter.SameJob(name, j.Name.ToString(), j.Abbreviation.ToString())).RowId);
+        // Reattaching a pull updates its reference and retains calibration against unchanged geometry.
+        var previous = Plugin.Replays.Attempts.FirstOrDefault(a => a.Plan.Id == Plan.Id &&
+            a.Evidence.Source == "FF Logs" && a.Evidence.ReportCode == data.ReportCode && a.Evidence.FightId == data.Fight.Id);
+        if (previous != null)
+        {
+            attempt.Id = previous.Id;
+            if (Newtonsoft.Json.JsonConvert.SerializeObject(previous.Plan.Roster) ==
+                Newtonsoft.Json.JsonConvert.SerializeObject(attempt.Plan.Roster))
+            {
+                foreach (var actor in attempt.Evidence.Actors)
+                {
+                    var old = previous.Evidence.Actors.FirstOrDefault(a => a.Id == actor.Id && a.JobId == actor.JobId);
+                    if (old != null) actor.SlotIndex = old.SlotIndex;
+                }
+                foreach (var duplicate in attempt.Evidence.Actors.Where(a => a.SlotIndex >= 0).GroupBy(a => a.SlotIndex).Where(g => g.Count() > 1))
+                    foreach (var actor in duplicate) actor.SlotIndex = -1;
+            }
+            var calibratedSlide = previous.Evidence.CalibrationSlideId;
+            if (calibratedSlide.Length > 0 && Newtonsoft.Json.JsonConvert.SerializeObject(previous.Plan.FindSlide(calibratedSlide)) ==
+                Newtonsoft.Json.JsonConvert.SerializeObject(attempt.Plan.FindSlide(calibratedSlide)))
+            {
+                attempt.Evidence.CalibrationSlideId = calibratedSlide;
+                attempt.Evidence.References = previous.Evidence.References;
+            }
+        }
+        var result = session.Apply(Plan, attempt, Plugin.Plans.SaveActive);
+        if (!result.Accepted) { Fail(result.Summary); return; }
+        StrategyMergeSession.LinkReplay(Plan, attempt);
+        Plugin.Replays.AddImported(attempt);
+        evidenceTimelines.Remove(attempt.Id); evidenceTimeline = null;
+        SelectReviewAttempt(attempt);
+        if (result.Changed) MarkDirty();
+        importStatusLine = result.Summary;
+        importDetail = string.Join("\n", evidence.Warnings);
+        importFailed = false;
     }
 
     private EvidenceTimeline TimelineFor(ReplayAttempt attempt)
@@ -89,6 +126,10 @@ public sealed partial class MainWindow
 
     private void DrawEvidencePanel(ReplayAttempt attempt)
     {
+        ImGui.BeginDisabled(Plan?.Id != attempt.Plan.Id || Plugin.Encounter.InCombat);
+        if (ImGui.Button("Update strategy from this pull")) SaveEvidenceEdits(attempt);
+        ImGui.EndDisabled();
+        if (Plan?.Id == attempt.Plan.Id) DrawStrategyEvidence(Plan);
         var timeline = TimelineFor(attempt);
         if (evidenceDraft != null && evidenceDraftAt != reviewTime) evidenceDraft = null;
         var evidence = attempt.Evidence;
@@ -229,7 +270,17 @@ public sealed partial class MainWindow
 
     private void SaveEvidenceEdits(ReplayAttempt attempt)
     {
-        try { Plugin.Replays.SaveEvidence(attempt); }
+        try
+        {
+            if (Plan?.Id == attempt.Plan.Id && !Plugin.Encounter.InCombat)
+            {
+                var result = new StrategyMergeSession(Plan).Apply(Plan, attempt, Plugin.Plans.SaveActive);
+                evidenceMessage = result.Summary;
+                if (result.Changed) MarkDirty();
+                StrategyMergeSession.LinkReplay(Plan, attempt);
+            }
+            Plugin.Replays.SaveEvidence(attempt);
+        }
         catch (Exception ex) { evidenceMessage = "Could not save replay changes: " + ex.Message; }
     }
 }

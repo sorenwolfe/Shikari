@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using Shikari.Model;
 
 namespace Shikari.Services.Replay;
 
@@ -7,13 +8,16 @@ public static class ReplayValidation
 {
     public static bool IsValid(ReplayAttempt attempt)
     {
-        if (attempt.Version != 1 || !Guid.TryParseExact(attempt.Id, "N", out _) ||
+        if (attempt.Version is not (1 or 2) || !Guid.TryParseExact(attempt.Id, "N", out _) ||
             !float.IsFinite(attempt.Duration) || attempt.Duration < 0 || attempt.Duration > ReplayBuffer.MaxDuration ||
             attempt.Plan?.Slides == null || attempt.Plan.Roster == null || attempt.Plan.Timeline == null ||
             attempt.Plan.Arena == null || attempt.Frames == null || attempt.Mechanics == null ||
             attempt.Frames.Count > ReplayBuffer.MaxFrames || attempt.Mechanics.Count > ReplayBuffer.MaxMechanics ||
             attempt.Plan.Slides.Any(s => s == null || s.Items == null || s.Items.Any(i => i == null || i.Points == null)) ||
             attempt.Plan.Roster.Any(r => r == null) || attempt.Plan.Timeline.Any(e => e == null)) return false;
+        if (attempt.Plan.FormatVersion > PlanDocument.CurrentFormatVersion ||
+            !StrategyEvidenceValidation.IsValid(attempt.Plan) || !SlideMetadataValidation.ValidArena(attempt.Plan.Arena) ||
+            attempt.Plan.Slides.Any(s => !SlideMetadataValidation.IsValid(s))) return false;
         var last = -1f;
         var evidence = attempt.Evidence;
         if (evidence == null || evidence.Actors == null || evidence.Statuses == null || evidence.Positions == null ||

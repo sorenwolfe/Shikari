@@ -13,9 +13,8 @@ namespace Shikari.UI;
 /// A minimap-sized copy of the current slide, for reading mid-pull. It puts itself on screen in
 /// raid content and gets out of the way everywhere else.
 ///
-/// During a pull it ignores the mouse completely, so a click meant for the game can never land
-/// here instead. Out of combat it takes the mouse back, which is when you drag it somewhere else
-/// or close it.
+/// During a pull the arena ignores the mouse unless explicitly unlocked. A separate footer
+/// receives input for personal-view controls and scrolling notes, including during combat.
 /// </summary>
 public sealed class MiniPlanWindow : Window, IDisposable
 {
@@ -54,8 +53,8 @@ public sealed class MiniPlanWindow : Window, IDisposable
     private string noteText = string.Empty;
     private string miniStatus = string.Empty;
     private string miniHint = string.Empty;
-    private float statusHeight;
     private float noteHeight;
+    private string notesSlideId = string.Empty;
     private ThemeScope theme;
 
     public MiniPlanWindow()
@@ -139,10 +138,12 @@ public sealed class MiniPlanWindow : Window, IDisposable
         var slot = Plugin.Roster.ResolveLocalSlot(activePlan);
         var target = activeSlide != null ? MiniMapLayout.Target(activeSlide, slot) : null;
         miniStatus = Plugin.Config.ShowLivePositions && aligned ? "LIVE TRACKING" : "PLAN VIEW";
-        if (!Plugin.Config.MiniPlanHighlightMe)
+        if (!Plugin.Config.MiniPlanHighlightMe && !Plugin.Config.MiniPlanYourView)
             miniHint = "Personal highlight is off in Settings.";
         else if (slot < 0)
-            miniHint = "Choose your seat in Plan > Roster.";
+            miniHint = Plugin.Config.MiniPlanYourView
+                ? "Choose your seat in Plan > Roster to show your planned spots. Other players are hidden."
+                : "Choose your seat in Plan > Roster.";
         else if (target == null)
             miniHint = "No single destination for your seat on this slide.";
         else if (!Plugin.Config.ShowLivePositions)
@@ -152,17 +153,19 @@ public sealed class MiniPlanWindow : Window, IDisposable
         else
             miniHint = "White diamond = you. Cyan ring = your spot.";
         noteText = CurrentNotes();
-        statusHeight = ImGui.GetTextLineHeight() * 2 + 18 * UiHelpers.Scale;
-        statusHeight += MathF.Min(ImGui.CalcTextSize(miniHint, false, side - 20 * UiHelpers.Scale).Y, ImGui.GetTextLineHeight() * 3);
-        noteHeight = statusHeight + MeasureNotes(noteText, side);
-        ImGui.SetNextWindowSize(new Vector2(side, side + noteHeight), ImGuiCond.Always);
+        var statusHeight = ImGui.GetFrameHeightWithSpacing() + ImGui.GetTextLineHeight() + 24 * UiHelpers.Scale;
+        statusHeight += MathF.Min(ImGui.CalcTextSize(miniHint, false, MathF.Max(1, side - 40 * UiHelpers.Scale)).Y, ImGui.GetTextLineHeight() * 3);
+        var viewport = ImGuiHelpers.MainViewport;
+        var windowSize = MiniMapLayout.FitWindow(side, statusHeight + MeasureNotes(noteText, side), viewport.Size);
+        noteHeight = windowSize.Y - windowSize.X;
+        ImGui.SetNextWindowSize(windowSize, ImGuiCond.Always);
 
-        // Only steer the position while the mouse is off it. Otherwise a drag fights the anchor.
-        if (ignoringMouse)
+        // Anchor the whole panel and clamp it after resolution, size or note-length changes.
+        // While dragging, DrawIdleChrome updates it directly instead.
+        if (!dragging)
         {
-            var viewport = ImGuiHelpers.MainViewport;
-            var position = viewport.Pos + (viewport.Size * Plugin.Config.MiniPlanAnchor);
-            ImGui.SetNextWindowPos(position, ImGuiCond.Always, new Vector2(0.5f, 0.5f));
+            var position = viewport.Pos + viewport.Size * Plugin.Config.MiniPlanAnchor - windowSize * 0.5f;
+            ImGui.SetNextWindowPos(MiniMapLayout.ClampPosition(position, windowSize, viewport.Pos, viewport.Size), ImGuiCond.Always);
         }
 
         // Theme first, then the padding, so the pops below unwind in the reverse order.
@@ -201,12 +204,13 @@ public sealed class MiniPlanWindow : Window, IDisposable
 
         DrawPanel(drawList, min, size);
 
-        canvas.HighlightSlot = Plugin.Config.MiniPlanHighlightMe
+        canvas.HighlightSlot = Plugin.Config.MiniPlanHighlightMe || Plugin.Config.MiniPlanYourView
             ? Plugin.Roster.ResolveLocalSlot(plan)
             : -1;
 
         canvas.LiveGuides = Plugin.Config.LivePositionGuides;
         canvas.FocusOnMe = Plugin.Config.MiniPlanOnlyMe;
+        canvas.MiniYourView = Plugin.Config.MiniPlanYourView;
         canvas.LivePlayers = Plugin.Config.ShowLivePositions
             ? Plugin.Tracker.Read(plan, slide)
             : null;
@@ -224,10 +228,12 @@ public sealed class MiniPlanWindow : Window, IDisposable
         canvas.Draw(plan, slide, new Vector2(board.X - (inset * 2), board.Y - (inset * 2)), editable: false);
 
         DrawSlideDots(drawList, min, board, plan.Slides.Count, index);
-        DrawNotes(drawList, min, size, board);
-
         if (!ignoringMouse)
-            DrawIdleChrome(drawList, min, size);
+            DrawIdleChrome(drawList, min, board);
+
+        // Separate top-level input window: a child of the click-through arena would inherit NoInputs.
+        // Read position again because the manual drag may have moved the board this frame.
+        DrawNotes(ImGui.GetWindowPos(), size, board, slide.Id);
     }
 
     /// <summary>The panel behind the arena: rounded, translucent, one hairline border.</summary>
@@ -294,38 +300,56 @@ public sealed class MiniPlanWindow : Window, IDisposable
 
         var pad = 10f * UiHelpers.Scale;
         var lines = Math.Clamp(Plugin.Config.MiniPlanNoteLines, 1, 12);
-        var wrapped = ImGui.CalcTextSize(text, false, width - (pad * 2)).Y;
+        var wrapped = ImGui.CalcTextSize(text, false, MathF.Max(1, width - (pad * 2) - ImGui.GetStyle().ScrollbarSize)).Y;
 
         return MathF.Min(wrapped, ImGui.GetTextLineHeight() * lines) + (pad * 2);
     }
 
-    private void DrawNotes(ImDrawListPtr drawList, Vector2 min, Vector2 size, Vector2 board)
+    private void DrawNotes(Vector2 min, Vector2 size, Vector2 board, string slideId)
     {
         var pad = 10f * UiHelpers.Scale;
-        var top = min.Y + board.Y;
-        // The footer needs its own solid surface; game scenery should not compete with instructions.
-        drawList.AddRectFilled(new Vector2(min.X, top), min + size, Palette.Pack(0x101014, 0.97f), 6 * UiHelpers.Scale);
-        drawList.AddLine(new Vector2(min.X + pad, top), new Vector2(min.X + size.X - pad, top), Palette.Line(0.18f), 1f);
-        drawList.PushClipRect(new Vector2(min.X + pad, top), new Vector2(min.X + size.X - pad, top + statusHeight), true);
-        ImGui.SetCursorPos(new Vector2(pad, board.Y + 7 * UiHelpers.Scale));
-        var status = canvas.Settled ? "IN POSITION" : miniStatus;
-        ImGui.TextColored(Palette.Vec(canvas.Settled ? 0x80EDA2u : 0x70DEFFu), status);
-        ImGui.PushTextWrapPos(size.X - pad);
-        ImGui.TextUnformatted(canvas.Settled ? "Green ring = in position." : miniHint);
-        ImGui.PopTextWrapPos();
-        if (noteText.Length > 0)
+        ImGui.SetNextWindowPos(min + new Vector2(0, board.Y), ImGuiCond.Always);
+        ImGui.SetNextWindowSize(new Vector2(size.X, noteHeight), ImGuiCond.Always);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(pad, 7 * UiHelpers.Scale));
+        if (ImGui.Begin("##shikari-mini-controls", BaseFlags))
         {
-            var notesTop = top + statusHeight;
-            drawList.PopClipRect();
-            drawList.PushClipRect(new Vector2(min.X + pad, notesTop), min + size - new Vector2(pad, 4 * UiHelpers.Scale), true);
-            ImGui.SetCursorPos(new Vector2(pad, board.Y + statusHeight));
-            ImGui.PushTextWrapPos(size.X - pad);
-            ImGui.PushStyleColor(ImGuiCol.Text, Palette.Vec(Palette.Text));
-            ImGui.TextUnformatted(noteText);
-            ImGui.PopStyleColor();
-            ImGui.PopTextWrapPos();
+            var footerMin = ImGui.GetWindowPos();
+            var drawList = ImGui.GetWindowDrawList();
+            drawList.AddRectFilled(footerMin, footerMin + ImGui.GetWindowSize(), Palette.Pack(0x101014, 0.97f), 6 * UiHelpers.Scale);
+            var yourView = Plugin.Config.MiniPlanYourView;
+            if (ImGui.Checkbox("Your view", ref yourView))
+            {
+                Plugin.Config.MiniPlanYourView = yourView;
+                Plugin.SaveConfig();
+            }
+            if (ImGui.IsItemHovered())
+                UiHelpers.Tooltip("Show your planned and live positions, keeping mechanics and waymarks. Scroll below to read all notes.");
+
+            // The footer owns input, but the text child owns vertical scrolling. It never grows
+            // with the notes, and wrapping uses the actual content width after the scrollbar.
+            var available = ImGui.GetContentRegionAvail();
+            if (available.Y > 1 && ImGui.BeginChild("##mini-notes", available, false, ImGuiWindowFlags.None))
+            {
+                if (notesSlideId != slideId)
+                {
+                    ImGui.SetScrollY(0);
+                    notesSlideId = slideId;
+                }
+                var status = canvas.Settled ? "IN POSITION" : miniStatus;
+                ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X);
+                ImGui.TextColored(Palette.Vec(canvas.Settled ? 0x80EDA2u : 0x70DEFFu), status);
+                ImGui.TextUnformatted(canvas.Settled ? "Green ring = in position." : miniHint);
+                if (noteText.Length > 0)
+                {
+                    ImGui.Separator();
+                    ImGui.TextUnformatted(noteText);
+                }
+                ImGui.PopTextWrapPos();
+            }
+            if (available.Y > 1) ImGui.EndChild();
         }
-        drawList.PopClipRect();
+        ImGui.End();
+        ImGui.PopStyleVar();
     }
     /// <summary>
     /// Shown only when the window is taking the mouse — that is, out of combat. The close button
@@ -394,7 +418,7 @@ public sealed class MiniPlanWindow : Window, IDisposable
         if (overClose)
             UiHelpers.Tooltip("Hide the mini plan. Bring it back with /shikari mini.");
         else if (!overGrip)
-            UiHelpers.Tooltip("Drag to move, or the corner to resize. It stops taking clicks once the pull starts.");
+            UiHelpers.Tooltip("Drag the arena to move, or its corner to resize. During pulls only the footer takes clicks unless unlocked.");
     }
 
     /// <summary>

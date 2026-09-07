@@ -52,13 +52,17 @@ You can also build slides from observed mechanics in **Learned** after a few pul
 Open **Plan → Import**, paste a link or Shikari share code into the bar, and press **Import** (or Enter). Shikari recognizes the source and shows the options you need:
 
 - **raidplan.io:** brings in the slides and editable diagrams as a new plan.
-- **WTFDIG:** loads the guide so you can check your strategy, role, group, and variants. Strategy links such as `#caro` preselect that strategy. Import the guide or choose one of its linked editable raidplans.
-- **FF Logs:** lets you choose a pull and preview its timeline and available cooldown assignments. Choose **Review this pull with this plan** to inspect its recorded statuses and positions alongside your strategy. API setup appears here when needed.
+- **WTFDIG:** brings the guide and its linked editable boards into one plan. Links such as `#caro` select the strategy and its defaults; your current job selects the initial role unless the link specifies one. You can change role, group, and variants in Import. Any unresolved choices appear before the import finishes.
+- **FF Logs:** adds a pull's cast, status, and movement observations to your current strategy. A link to a specific fight imports it directly; a whole report lets you choose a pull and press **Enrich this strategy**. Open **Review** to inspect the recording. API setup appears here when needed.
 - **Shikari share code:** imports a new copy. Enable **Update the saved plan with the same ID** to replace a matching saved plan with an update from your raid lead.
 
 Use **Import a saved file** for a raidplan JSON file or a Shikari share-code text file. To send your own plan to the group, open **Plan → Share**.
 
-WTFDIG guide images are references and don't provide calibrated Live positions. Imported guide timings stay disabled until you review and link them. Importing a guide or log does not automatically create adaptive rules.
+Editable boards keep their source links and arena settings. When a diagram cannot be converted, its guide notes and available reference image remain. Guide images alone don't provide calibrated Live positions. Imported and newly inferred timeline entries stay disabled until you review them.
+
+You can import a WTFDIG strategy first and then paste an FF Logs fight link into the same bar. Shikari matches casts to existing mechanics where the action or name is unambiguous, adds missing timing references, and keeps observed statuses beside them. A match to a whole phase can add timing without guessing which of its boards is your destination. **Strategy references** shows what matched and what remains unresolved. Finished local recordings also enrich the unchanged active plan.
+
+Position comparisons need alignment. Use matching landmarks in Review to align FF Logs coordinates; sparse or missing observations stay unresolved. When enough evidence supports an assignment, Shikari can add a disabled Adaptive draft. A player standing somewhere in a log doesn't prove that spot was safe, so review the rule and its other outcomes before enabling it.
 
 ## Find your spot during a pull
 
@@ -75,7 +79,7 @@ The connecting line points to your destination; it doesn't find a safe route aro
 
 Live positions need matching waymarks in the duty and on the plan. The mini window explains when alignment is missing. Check **Plan → Roster** if your seat isn't being picked up correctly.
 
-Unlock the mini window in settings to move or resize it outside combat. During a pull it ignores mouse clicks. Slide notes appear underneath the board.
+Enable **Your view** under the mini board to hide other players' tokens and labels while keeping mechanics, waymarks, and your own destinations. The choice is remembered. Notes wrap in a scrollable panel beneath the board, and the checkbox and notes remain usable during pulls. Unlock the arena in settings to move or resize it; the arena itself normally ignores clicks during combat.
 
 ## Calls and changing mechanics
 
@@ -89,11 +93,11 @@ A rule can require up to four statuses at once, with optional duration and param
 
 Open **Review** or use `/shikari review`. Pick an attempt and a mechanic, then play or scrub through the recorded positions over your plan. You can compare attempts to see what changed.
 
-Recording and saved-attempt controls are under **Review → Recording & storage**. Recordings stay on your computer and aren't included in shared plan codes.
+Recording and saved-attempt controls are under **Review → Recording & storage**. Full recordings stay on your computer. Shared plans include compact attached observations, report/fight references, and anonymous player or seat identifiers; they don't include the recording's character names or full movement history. Plans using these references or separate board arenas require this updated client.
 
 ### Connect a log to your strategy
 
-1. Import or open your raidplan or WTFDIG strategy first. Then paste an FF Logs report into the same import bar, select a fight, and choose **Review this pull with this plan**.
+1. Import or open your raidplan or WTFDIG strategy first. Paste an FF Logs fight link into the same import bar. For a whole report, select a fight and choose **Enrich this strategy**, then open **Review**.
 2. In **Review**, select a cast and scrub to the assignment. Expand **Statuses & strategy**, choose a player, and set their plan seat to compare the same role across pulls.
 3. Read the slide notes beside that player's active buffs and debuffs. Choose the strategy slide that matches their assignment. **Link cast to this slide** saves a timeline link for you to review before enabling it.
 4. Select the relevant statuses, set the duty, and use **Test selected assignment**. If the result fits the strategy, choose **Add disabled rule to plan**, then review its conditions in **Plan → Adaptive** before enabling it.
@@ -104,7 +108,7 @@ Log positions appear on a source map because their coordinates differ from the p
 
 New local recordings also retain readable party buffs, debuffs, and positions, so you can inspect your own pulls through the same controls. Older recordings keep their existing playback but won't gain status history retroactively. Unknown status parameters stay unknown; incomplete log imports can be inspected but can't generate rules.
 
-Rule drafts use observed status durations with a two-second margin. Review those ranges for mechanics where timer lengths determine the assignment. Replay evidence stays local; sharing a plan sends the rules you authored, not the recorded players or their history.
+Rule drafts use observed status durations with a two-second margin. Review those ranges for mechanics where timer lengths determine the assignment. Sharing sends the plan's rules and compact strategy references, while full replay files stay local.
 
 ## Moving from RaidPlan
 

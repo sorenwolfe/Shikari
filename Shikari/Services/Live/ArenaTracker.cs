@@ -42,6 +42,9 @@ public sealed class ArenaTracker
     private WorldAlignment cached;
     private DateTime cachedAtUtc = DateTime.MinValue;
     private string cachedSlideId = string.Empty;
+    private PlanDocument? cachedPlan;
+    private string cachedSourceUrl = string.Empty;
+    private bool cachedLegacyBoard;
     private bool cachedResult;
 
     /// <summary>Why there is nothing to draw, in words a player can act on.</summary>
@@ -62,14 +65,16 @@ public sealed class ArenaTracker
     /// Lines the board up with the arena using the waymarks as the common reference.
     /// </summary>
     /// <remarks>
-    /// The current slide first, because that is what is on screen; then any slide with enough
-    /// waymarks, because plenty of plans only mark up the first one and the arena has not moved.
+    /// The current slide first, then other steps of the same source board. Legacy authored
+    /// plans can share waymarks, but independently imported boards cannot share coordinates.
     /// </remarks>
     public bool TryAlign(PlanDocument plan, Slide? slide, out WorldAlignment alignment)
     {
         var slideId = slide?.Id ?? string.Empty;
 
-        if (slideId == cachedSlideId && DateTime.UtcNow - cachedAtUtc < AlignmentLifetime)
+        if (ReferenceEquals(plan, cachedPlan) && slideId == cachedSlideId &&
+            (slide?.SourceUrl ?? string.Empty) == cachedSourceUrl && LegacyBoard(slide) == cachedLegacyBoard &&
+            DateTime.UtcNow - cachedAtUtc < AlignmentLifetime)
         {
             alignment = cached;
             return cachedResult;
@@ -80,6 +85,9 @@ public sealed class ArenaTracker
         cached = alignment;
         cachedResult = result;
         cachedSlideId = slideId;
+        cachedPlan = plan;
+        cachedSourceUrl = slide?.SourceUrl ?? string.Empty;
+        cachedLegacyBoard = LegacyBoard(slide);
         cachedAtUtc = DateTime.UtcNow;
 
         return result;
@@ -102,7 +110,7 @@ public sealed class ArenaTracker
         var drawn = DrawnWaymarks(plan, slide);
         if (drawn == null)
         {
-            Status = "This plan has no waymarks on it, so there is nothing to line it up by.";
+            Status = "This board has no usable waymarks. Add matching waymarks to this board to align live positions.";
             return false;
         }
 
@@ -228,12 +236,27 @@ public sealed class ArenaTracker
 
         foreach (var other in plan.Slides)
         {
-            if (!ReferenceEquals(other, slide) && TryCollect(other, out var found))
+            if (!ReferenceEquals(other, slide) && SameBoard(slide, other) && TryCollect(other, out var found))
                 return found;
         }
 
         return null;
     }
+
+    private static bool SameBoard(Slide? current, Slide other)
+    {
+        var source = BoardSource(current);
+        if (source.Length > 0) return source == BoardSource(other);
+        return LegacyBoard(current) && LegacyBoard(other);
+    }
+
+    private static string BoardSource(Slide? slide) => slide != null &&
+        Uri.TryCreate(slide.SourceUrl, UriKind.Absolute, out var source) && source.Scheme is "https" or "http"
+            ? source.GetLeftPart(UriPartial.Query) : string.Empty;
+
+    private static bool LegacyBoard(Slide? slide) => slide == null ||
+        string.IsNullOrEmpty(slide.SourceUrl) && string.IsNullOrEmpty(slide.GuideUrl) && string.IsNullOrEmpty(slide.SourceLabel) &&
+        slide.SourceStep < 0 && slide.ArenaOverride == null;
 
     private static bool TryCollect(Slide slide, out Dictionary<string, Vector2> marks)
     {

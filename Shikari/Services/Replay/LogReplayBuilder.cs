@@ -22,6 +22,7 @@ public static class LogReplayBuilder
         evidence.Url = $"https://www.fflogs.com/reports/{data.ReportCode}?fight={data.Fight.Id}";
         evidence.ReportCode = data.ReportCode;
         evidence.FightId = data.Fight.Id;
+        evidence.EncounterId = data.Fight.EncounterId;
         evidence.Complete = source.Complete;
         evidence.Warnings.AddRange(source.Warnings.Take(90));
         var participating = source.StatusEvents.Select(e => e.TargetId).Concat(source.Positions.Select(e => e.ActorId))

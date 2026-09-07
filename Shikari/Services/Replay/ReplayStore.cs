@@ -23,6 +23,7 @@ public sealed class ReplayStore : IDisposable
     private readonly Task<List<ReplayAttempt>> loading;
     private Task writes = Task.CompletedTask;
     private ReplayBuffer? buffer;
+    private StrategyMergeSession? strategySession;
     private LocalEvidenceCapture capture = new();
     private float nextSample;
     private bool loaded;
@@ -75,6 +76,7 @@ public sealed class ReplayStore : IDisposable
         {
             capture = new LocalEvidenceCapture();
             buffer = new ReplayBuffer(plan, Plugin.Roster.ResolveLocalSlot(plan), DateTime.UtcNow);
+            strategySession = new StrategyMergeSession(plan);
             buffer.Attempt.TerritoryId = Plugin.ClientState.TerritoryType;
             nextSample = 0;
             clock.Restart();
@@ -160,7 +162,8 @@ public sealed class ReplayStore : IDisposable
         }
         if (!matched)
             buffer.AddMechanic(new ReplayMechanic { ActionId = cast.ActionId, Occurrence = cast.Occurrence,
-                Label = "Cast #" + cast.ActionId, Time = cast.CombatTime, ExpectedResolve = cast.CombatTime + cast.TotalCastTime });
+                Label = Plugin.Actions.Get(cast.ActionId)?.Name ?? "Cast #" + cast.ActionId,
+                Time = cast.CombatTime, ExpectedResolve = cast.CombatTime + cast.TotalCastTime });
     }
 
     private void End() => Finish(Plugin.Encounter.LastPullWasWipe ? "Wipe" : "Combat ended");
@@ -170,6 +173,8 @@ public sealed class ReplayStore : IDisposable
     private void Finish(string reason)
     {
         var completed = buffer?.Finish(reason, (float)clock.Elapsed.TotalSeconds);
+        var session = strategySession;
+        strategySession = null;
         buffer = null;
         clock.Stop();
         if (completed == null) return;
@@ -178,7 +183,21 @@ public sealed class ReplayStore : IDisposable
         completed.Evidence.Statuses.RemoveAll(s => s.Time > completed.Duration);
         completed.Evidence.Positions.RemoveAll(s => s.Time > completed.Duration);
         completed.AdaptiveDecisions.RemoveAll(d => d.Time > completed.Duration);
-        try { AddImported(completed); }
+        try
+        {
+            AddImported(completed);
+            var plan = Plugin.Plans.Active;
+            if (!disposed && reason is "Wipe" or "Combat ended" && plan != null && session != null)
+            {
+                var result = session.Apply(plan, completed, Plugin.Plans.SaveActive);
+                status = result.Summary;
+                if (result.Accepted)
+                {
+                    StrategyMergeSession.LinkReplay(plan, completed);
+                    SaveEvidence(completed);
+                }
+            }
+        }
         catch (Exception ex) { status = "Replay could not be saved: " + ex.Message; Plugin.Log.Warning(ex, "Replay save failed."); }
     }
 
