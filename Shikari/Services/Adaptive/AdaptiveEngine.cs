@@ -89,28 +89,33 @@ public sealed class AdaptiveEngine
         if (!float.IsFinite(time) || time < 0) return decisions;
         foreach (var state in armed.ToArray())
         {
+            var deadline = state.Start + state.Rule.WindowSeconds;
             var changed = false;
             foreach (var observed in observations)
             {
                 if (observed == null || !float.IsFinite(observed.Time) ||
                     (observed.DurationKnown && (!float.IsFinite(observed.Duration) || observed.Duration < 0))) continue;
-                if (observed.Time < state.Start || observed.Time > time || observed.Time > state.Start + state.Rule.WindowSeconds) continue;
+                if (observed.Time < state.Start || observed.Time > time) continue;
                 if (!state.Rule.Branches.Any(b => b.StatusId == observed.StatusId ||
                     b.AdditionalStatuses.Any(c => c.StatusId == observed.StatusId))) continue;
                 var key = (observed.StatusId, observed.SourceId);
+                // A late removal/refresh/change can invalidate an existing assignment, but cannot
+                // acquire a new condition after the window. Retain it as a tombstone for old deltas.
+                if (observed.Time > deadline && !state.Statuses.ContainsKey(key)) continue;
                 if (state.Statuses.TryGetValue(key, out var prior) &&
                     (prior.Time > observed.Time || SameObservation(prior, observed))) continue;
                 state.Statuses[key] = observed;
                 changed = true;
             }
+            var eligible = state.Statuses.Values.Where(o => o.Time <= deadline).ToArray();
             var matches = Enumerable.Range(0, state.Rule.Branches.Count)
-                .Where(i => Matches(state.Rule.Branches[i], state.Statuses.Values, time)).ToHashSet();
+                .Where(i => Matches(state.Rule.Branches[i], eligible, time)).ToHashSet();
             changed |= !matches.SetEquals(state.Matches);
             state.Matches = matches;
             if (matches.Count == 0) state.SettledSince = -1;
             else if (changed || state.SettledSince < 0) state.SettledSince = time;
-            var expired = time >= state.Start + state.Rule.WindowSeconds;
-            var settled = state.SettledSince >= 0 && time - state.SettledSince >= .3f;
+            var expired = time >= deadline;
+            var settled = state.SettledSince >= 0 && time - state.SettledSince >= .3f && state.SettledSince + .3f <= deadline;
             if (!expired && !settled) continue;
             var decision = new AdaptiveDecision { Time = time, Mechanic = state.Rule.Label,
                 AnchorActionId = state.Rule.AnchorActionId, Occurrence = state.Occurrence };
@@ -119,7 +124,7 @@ public sealed class AdaptiveEngine
                 var match = state.Matches.First();
                 var b = state.Rule.Branches[match];
                 decision.SlideId = b.SlideId;
-                var evidence = state.Statuses.Values.First(o => Matches(b.StatusId, b.Parameter, b.MinimumSeconds, b.MaximumSeconds, o, time));
+                var evidence = eligible.First(o => Matches(b.StatusId, b.Parameter, b.MinimumSeconds, b.MaximumSeconds, o, time));
                 decision.Reason = $"{b.Label}: status #{evidence.StatusId}, initial observed duration " +
                     (evidence.DurationKnown ? $"{evidence.Duration:0.0}s" : "unknown") + ", parameter " +
                     (evidence.ParameterKnown ? evidence.Parameter.ToString() : "unknown") + $", source #{evidence.SourceId}.";

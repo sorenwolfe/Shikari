@@ -126,6 +126,22 @@ public static class AdaptiveTests
         engine = NewEngine();
         engine.Update(new[] { Status(10, 14.9f), Status(11, 14.9f) }, 14.9f);
         Check(engine.Update(empty, 15)[0].SlideId == "", "Window end cannot bypass the settling interval");
+        engine = NewEngine();
+        engine.Update(new[] { Status(10, 14.9f), Status(11, 14.9f) }, 14.9f);
+        Check(engine.Update(empty, 15.4f)[0].SlideId == "", "Delayed evaluation cannot settle an assignment beyond its acquisition window");
+        engine = NewEngine();
+        engine.Update(new[] { Status(10, 14.6f), Status(11, 14.6f) }, 14.6f);
+        Check(engine.Update(new[] { Status(10, 15.1f, 0, ",\"Removed\":true") }, 15.4f)[0].SlideId == "",
+            "Post-window removal must invalidate a pending assignment before delayed evaluation");
+        engine = NewEngine();
+        engine.Update(new[] { Status(10, 14.6f), Status(11, 14.6f) }, 14.6f);
+        changed = Status(11, 15.1f); changed.Parameter = 3;
+        Check(engine.Update(new[] { changed }, 15.4f)[0].SlideId == "",
+            "Post-window parameter change must invalidate a pending assignment before delayed evaluation");
+        engine = NewEngine();
+        engine.Update(new[] { Status(10, 14.6f), Status(11, 14.6f) }, 14.6f);
+        Check(engine.Update(empty, 15.4f)[0].SlideId == branch.SlideId,
+            "Delayed evaluation may select a still-active assignment that settled before the deadline");
         var alternative = JsonConvert.DeserializeObject<StatusBranch>(JsonConvert.SerializeObject(branch))!;
         rule.Branches.Add(alternative); engine = NewEngine();
         engine.Update(new[] { Status(10, 1), Status(11, 1) }, 1);
