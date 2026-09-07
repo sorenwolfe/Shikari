@@ -43,6 +43,9 @@ public sealed class LogCast
     /// <summary>Cast bar length, when the log had a begincast and a cast to pair up.</summary>
     public float CastSeconds { get; init; }
 
+    /// <summary>A begincast was observed, including interrupted casts with no measured duration.</summary>
+    public bool IsCastStart { get; init; }
+
     public bool FromEnemy { get; init; }
 }
 

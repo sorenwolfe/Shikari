@@ -16,6 +16,7 @@ private static readonly LogFight Fight = new() { Id=30, StartTime=10000, EndTime
 private static string Page(string rows, string next="null") => "{\"data\":{\"reportData\":{\"report\":{\"events\":{\"data\":" + rows + ",\"nextPageTimestamp\":" + next + "}}}}}";
 private sealed class Responses : HttpMessageHandler {
     private readonly Queue<string> pages;
+    public bool RequireEvidenceQuery { get; init; } = true;
     public Responses(params string[] pages) => this.pages = new(pages);
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancel) {
         cancel.ThrowIfCancellationRequested();
@@ -23,13 +24,29 @@ private sealed class Responses : HttpMessageHandler {
         if (request.RequestUri!.AbsolutePath.EndsWith("/token")) body="{\"access_token\":\"fixture\",\"expires_in\":3600}";
         else {
             var query = JObject.Parse(await request.Content!.ReadAsStringAsync(cancel)).Value<string>("query")!;
-            Check(query.Contains("includeResources: true") && query.Contains("dataType: All"), "Evidence request must include resources and all event types");
+            if (RequireEvidenceQuery) Check(query.Contains("includeResources: true") && query.Contains("dataType: All"), "Evidence request must include resources and all event types");
             body=pages.Dequeue();
         }
         return new(HttpStatusCode.OK) { Content=new StringContent(body) };
     }
 }
 public static async Task Run() {
+    using(var client=new FfLogsClient(new Responses(
+        "{\"data\":{\"reportData\":{\"report\":{\"masterData\":{\"actors\":[],\"abilities\":[]}}}}}",
+        Page("""
+        [{"timestamp":11000,"type":"begincast","sourceID":1,"abilityGameID":100},
+         {"timestamp":12000,"type":"begincast","sourceID":1,"abilityGameID":100},
+         {"timestamp":14000,"type":"cast","sourceID":1,"abilityGameID":100},
+         {"timestamp":15000,"type":"cast","sourceID":1,"abilityGameID":200}]
+        """), Page("[]")) { RequireEvidenceQuery=false })) {
+        var data=await client.GetFightDataAsync("id","secret","code",Fight);
+        var castStart=typeof(LogCast).GetProperty("IsCastStart");
+        Check(castStart!=null, "Cast evidence must identify observed cast-bar starts");
+        Check(data.EnemyCasts.Count==3, "Interrupted, completed, and instant actions each retain one cast entry");
+        Check((bool)castStart!.GetValue(data.EnemyCasts[0])! && data.EnemyCasts[0].CastSeconds==0, "Interrupted begincast remains a cast start without inventing duration");
+        Check((bool)castStart.GetValue(data.EnemyCasts[1])! && data.EnemyCasts[1].CastSeconds==2, "Paired completed cast retains its observed start");
+        Check(!(bool)castStart.GetValue(data.EnemyCasts[2])!, "Instant action must not become a cast-bar occurrence");
+    }
     var parser=new LogEvidenceParser(Fight, new Dictionary<uint,string>{{1000048,"Well Fed"}});
     parser.AddPage(JArray.Parse("""
     [

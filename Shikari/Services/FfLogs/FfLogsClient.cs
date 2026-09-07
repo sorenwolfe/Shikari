@@ -285,6 +285,7 @@ public sealed class FfLogsClient : IDisposable
                         SourceId = source,
                         AbilityId = abilityId,
                         TimeSeconds = relative,
+                        IsCastStart = true,
                         FromEnemy = hostility == "Enemies",
                     });
                     continue;
@@ -308,6 +309,7 @@ public sealed class FfLogsClient : IDisposable
                             AbilityId = abilityId,
                             TimeSeconds = began,
                             CastSeconds = MathF.Max(0f, relative - began),
+                            IsCastStart = true,
                             FromEnemy = match.FromEnemy,
                         };
                     }
