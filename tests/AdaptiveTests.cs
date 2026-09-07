@@ -9,6 +9,7 @@ public static class AdaptiveTests
     public static void Run()
     {
         CompoundRules();
+        PermanentStatuses();
         var tracker = new StatusTracker();
         Check(tracker.Observe(new[] { new StatusSample(10, 30, 0, 99) }, 0).Count == 0, "First snapshot establishes baseline");
         var lost = tracker.Observe(Array.Empty<StatusSample>(), 1);
@@ -59,6 +60,28 @@ public static class AdaptiveTests
         engine = new AdaptiveEngine(plan, 1);
         Check(engine.ActiveRuleCount == 0, "Overlapping wildcard/specific rules cannot independently overwrite assignments");
         Console.WriteLine("PASS: status baseline, initial duration, countdown, refresh, gaps, occurrence, scope, settling, conflicts, timeout, one decision per arm");
+    }
+
+    private static void PermanentStatuses()
+    {
+        var tracker = new StatusTracker();
+        tracker.Observe(Array.Empty<StatusSample>(), 0);
+        var gained = tracker.Observe(new[] { new StatusSample(10, 0, 0, 99) }, 1);
+        Check(gained.Count == 1 && !gained[0].DurationKnown && !gained[0].Removed,
+            "A permanent status gain must have unknown duration instead of expiring immediately");
+        var plan = PlanDocument.CreateDefault();
+        var rule = new AdaptiveMechanic { Enabled = true, TerritoryId = 1, AnchorActionId = 100 };
+        var branch = new StatusBranch { StatusId = 10, MaximumSeconds = 3600, SlideId = plan.Slides[0].Id };
+        rule.Branches.Add(branch); plan.AdaptiveMechanics.Add(rule);
+        var engine = new AdaptiveEngine(plan, 1); engine.Arm(100, 1, 0);
+        engine.Update(gained, 1);
+        Check(engine.Update(Array.Empty<StatusObservation>(), 1.4f)[0].SlideId == branch.SlideId,
+            "A permanent status can select an explicitly unrestricted duration branch");
+        branch.MaximumSeconds = 60;
+        engine = new AdaptiveEngine(plan, 1); engine.Arm(100, 1, 0);
+        engine.Update(gained, 1);
+        Check(engine.Update(Array.Empty<StatusObservation>(), 15)[0].SlideId == "",
+            "Permanent status unknown duration cannot satisfy a bounded duration branch");
     }
 
     private static void CompoundRules()

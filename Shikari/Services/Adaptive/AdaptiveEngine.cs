@@ -25,13 +25,13 @@ public sealed class StatusTracker
             if (ready && (!previous.TryGetValue(key, out var old) || old.Parameter != sample.Parameter ||
                 sample.Remaining > old.Remaining + 1))
                 result.Add(new StatusObservation { Time = time, StatusId = sample.Id, Duration = sample.Remaining,
-                    Parameter = sample.Parameter, SourceId = sample.Source });
+                    DurationKnown = sample.Remaining > 0, Parameter = sample.Parameter, SourceId = sample.Source });
         }
         if (ready)
             foreach (var (key, sample) in previous)
                 if (!current.ContainsKey(key))
                     result.Add(new StatusObservation { Time = time, StatusId = sample.Id,
-                        Parameter = sample.Parameter, SourceId = sample.Source, Removed = true });
+                        Parameter = sample.Parameter, SourceId = sample.Source, Removed = true, DurationKnown = false });
         previous = current;
         ready = true;
         return result;

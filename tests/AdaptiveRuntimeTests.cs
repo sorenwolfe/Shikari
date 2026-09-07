@@ -116,6 +116,18 @@ namespace Shikari.Tests
                 Plugin.ObjectTable.LocalPlayer.StatusList.Add(new FakeStatus()); Plugin.Framework.Tick(4); Plugin.Framework.Tick(4.4f);
                 Check(service.Decisions.Count == 1 && service.Decisions[0].SlideId.Length > 0, "Fresh evidence after actor gap may complete the armed rule");
             }
+            foreach (var unrestricted in new[] { true, false })
+            {
+                Plugin.Encounter.End(); Plugin.ObjectTable.LocalPlayer = new FakePlayer();
+                rule.Branches[0].MinimumSeconds = 0;
+                rule.Branches[0].MaximumSeconds = unrestricted ? 3600 : 60;
+                Plugin.Encounter.Begin(); Plugin.Framework.Tick(0); Plugin.Framework.Tick(1); Plugin.Encounter.Cast();
+                Plugin.ObjectTable.LocalPlayer.StatusList.Add(new FakeStatus { RemainingTime = 0 });
+                Plugin.Framework.Tick(2); Plugin.Framework.Tick(2.4f);
+                if (!unrestricted) Plugin.Framework.Tick(17);
+                Check(service.Decisions.Count == 1 && (service.Decisions[0].SlideId.Length > 0) == unrestricted,
+                    "Live permanent status may select only an explicitly unrestricted duration rule");
+            }
             Plugin.Encounter.End(); Plugin.ObjectTable.LocalPlayer.StatusList.Clear();
             Plugin.Encounter.Begin(); Plugin.Framework.Tick(0); Plugin.Framework.Tick(1); Plugin.Encounter.Cast();
             Plugin.Plans.Active = PlanDocument.CreateDefault(); Plugin.Framework.Tick(2);
