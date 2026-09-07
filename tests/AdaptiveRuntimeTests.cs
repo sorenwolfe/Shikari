@@ -37,7 +37,7 @@ namespace Shikari
         public void Change() { TerritoryType++; TerritoryChanged?.Invoke(TerritoryType); }
     }
     public sealed class FakeObjects { public FakePlayer? LocalPlayer = new(); }
-    public sealed class FakePlayer { public uint EntityId = 20; public List<FakeStatus> StatusList = new(); }
+    public sealed class FakePlayer { public uint EntityId = 20; public bool IsDead; public List<FakeStatus> StatusList = new(); }
     public sealed class FakeStatus { public uint StatusId = 10, SourceId = 99; public float RemainingTime = 30; public ushort Param = 0; }
     public sealed class FakeFramework : Dalamud.Plugin.Services.IFramework
     {
@@ -102,6 +102,20 @@ namespace Shikari.Tests
             Plugin.ObjectTable.LocalPlayer.StatusList.Add(new FakeStatus()); Plugin.Framework.Tick(2);
             Plugin.Encounter.WipeOnly(); Plugin.Framework.Tick(2.4f);
             Check(service.Decisions.Count == 0, "Wipe without CombatEnded cancels pending evaluation");
+            foreach (var gap in new[] { "missing", "replacement", "dead" })
+            {
+                Plugin.Encounter.End(); Plugin.ObjectTable.LocalPlayer = new FakePlayer();
+                Plugin.Encounter.Begin(); Plugin.Framework.Tick(0); Plugin.Framework.Tick(1); Plugin.Encounter.Cast();
+                Plugin.ObjectTable.LocalPlayer.StatusList.Add(new FakeStatus()); Plugin.Framework.Tick(2);
+                if (gap == "missing") Plugin.ObjectTable.LocalPlayer = null;
+                if (gap == "replacement") Plugin.ObjectTable.LocalPlayer = new FakePlayer { EntityId = 21 };
+                if (gap == "dead") Plugin.ObjectTable.LocalPlayer!.IsDead = true;
+                Plugin.Framework.Tick(2.4f);
+                Check(service.Decisions.Count == 0, "A " + gap + " actor must invalidate pending assignment evidence");
+                Plugin.ObjectTable.LocalPlayer = new FakePlayer(); Plugin.Framework.Tick(3);
+                Plugin.ObjectTable.LocalPlayer.StatusList.Add(new FakeStatus()); Plugin.Framework.Tick(4); Plugin.Framework.Tick(4.4f);
+                Check(service.Decisions.Count == 1 && service.Decisions[0].SlideId.Length > 0, "Fresh evidence after actor gap may complete the armed rule");
+            }
             Plugin.Encounter.End(); Plugin.ObjectTable.LocalPlayer.StatusList.Clear();
             Plugin.Encounter.Begin(); Plugin.Framework.Tick(0); Plugin.Framework.Tick(1); Plugin.Encounter.Cast();
             Plugin.Plans.Active = PlanDocument.CreateDefault(); Plugin.Framework.Tick(2);

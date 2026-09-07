@@ -23,10 +23,25 @@ public sealed class AdaptiveMechanic
 
     public bool IsValid(PlanDocument plan) => TerritoryId > 0 && AnchorActionId > 0 && Occurrence >= 0 &&
         float.IsFinite(WindowSeconds) && WindowSeconds >= 1 && WindowSeconds <= 60 &&
-        Branches is { Count: > 0 and <= 16 } && Branches.All(b => b != null && b.StatusId > 0 &&
-            b.Parameter >= -1 && b.Parameter <= ushort.MaxValue && float.IsFinite(b.MinimumSeconds) &&
-            float.IsFinite(b.MaximumSeconds) && b.MinimumSeconds >= 0 && b.MaximumSeconds > b.MinimumSeconds &&
-            b.MaximumSeconds <= 3600 && plan.FindSlide(b.SlideId) != null);
+        Branches is { Count: > 0 and <= 16 } && Branches.All(b => b != null &&
+            StatusCondition.IsValid(b.StatusId, b.Parameter, b.MinimumSeconds, b.MaximumSeconds) &&
+            b.AdditionalStatuses is { Count: <= 3 } && b.AdditionalStatuses.All(c => c != null &&
+                StatusCondition.IsValid(c.StatusId, c.Parameter, c.MinimumSeconds, c.MaximumSeconds)) &&
+            plan.FindSlide(b.SlideId) != null);
+}
+
+/// <summary>An AND condition. The full [0, 3600) range accepts an unknown initial duration.</summary>
+public sealed class StatusCondition
+{
+    public uint StatusId { get; set; }
+    [DefaultValue(-1)]
+    public int Parameter { get; set; } = -1;
+    public float MinimumSeconds { get; set; }
+    public float MaximumSeconds { get; set; } = 60;
+
+    internal static bool IsValid(uint statusId, int parameter, float minimum, float maximum) =>
+        statusId > 0 && parameter >= -1 && parameter <= ushort.MaxValue && float.IsFinite(minimum) &&
+        float.IsFinite(maximum) && minimum >= 0 && maximum > minimum && maximum <= 3600;
 }
 
 public sealed class StatusBranch
@@ -38,6 +53,8 @@ public sealed class StatusBranch
     public float MinimumSeconds { get; set; }
     public float MaximumSeconds { get; set; } = 60;
     public string SlideId { get; set; } = string.Empty;
+    public List<StatusCondition> AdditionalStatuses { get; set; } = new();
+    public bool ShouldSerializeAdditionalStatuses() => AdditionalStatuses is { Count: > 0 };
 }
 
 public sealed class AdaptiveDecision
@@ -59,4 +76,10 @@ public sealed class StatusObservation
     public float Duration { get; set; }
     public ushort Parameter { get; set; }
     public uint SourceId { get; set; }
+    public bool Removed { get; set; }
+    public bool Baseline { get; set; }
+    [DefaultValue(true)]
+    public bool ParameterKnown { get; set; } = true;
+    [DefaultValue(true)]
+    public bool DurationKnown { get; set; } = true;
 }

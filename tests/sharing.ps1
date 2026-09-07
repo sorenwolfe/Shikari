@@ -84,6 +84,29 @@ try {
     Assert ($decoded.AdaptiveMechanics[0].Branches[0].SlideId -eq $plan.Slides[0].Id) 'Branch slide reference lost'
     $json = [Newtonsoft.Json.JsonConvert]::SerializeObject($plan, [Shikari.Services.PlanJson]::Compact())
     Assert ($json.Contains('"FormatVersion":2')) 'Wire format version omitted; old clients could silently drop rules'
+    $extra = [Shikari.Model.StatusCondition]::new()
+    $extra.StatusId = 11; $extra.Parameter = 0; $extra.MaximumSeconds = 3600
+    $branch.AdditionalStatuses.Add($extra)
+    Assert ([Shikari.Services.ShareCode]::TryDecode([Shikari.Services.ShareCode]::Encode($plan), [ref]$decoded, [ref]$errorText)) 'Compound sharing failed'
+    Assert ($decoded.FormatVersion -eq 3) 'Compound plan must require a client that understands AND conditions'
+    Assert (!$decoded.AdaptiveMechanics[0].Enabled) 'Decoded shared rules must require explicit verification before enabling'
+    Assert ($decoded.AdaptiveMechanics[0].Branches[0].AdditionalStatuses[0].Parameter -eq 0) 'Extra exact zero parameter changed'
+    Assert ($decoded.AdaptiveMechanics[0].Branches[0].AdditionalStatuses[0].MaximumSeconds -eq 3600) 'Unrestricted extra duration changed'
+    $json = [Newtonsoft.Json.JsonConvert]::SerializeObject($plan, [Shikari.Services.PlanJson]::Compact())
+    Assert ($json.Contains('"FormatVersion":3')) 'Compound wire version omitted'
+    $branch.AdditionalStatuses.Add($extra); $branch.AdditionalStatuses.Add($extra); $branch.AdditionalStatuses.Add($extra)
+    Assert (!$rule.IsValid($plan)) 'Over-limit conjunction accepted by evaluator validation'
+    Assert (![Shikari.Services.ShareCode]::TryDecode([Shikari.Services.ShareCode]::Encode($plan), [ref]$decoded, [ref]$errorText)) 'Over-limit conjunction accepted by sharing'
+    $rule.Enabled = $true
+    $null = [Shikari.Services.PlanNormaliser]::Normalise($plan)
+    Assert (!$rule.Enabled) 'Invalid conjunction remained enabled after disk normalization'
+    Assert ($branch.AdditionalStatuses.Count -le 3) 'Disk conjunction list was not bounded'
+    $branch.AdditionalStatuses.Clear(); $branch.AdditionalStatuses.Add($extra); $rule.Enabled = $true
+    $unknown = [Shikari.Model.StatusObservation]::new()
+    $unknown.ParameterKnown = $false; $unknown.DurationKnown = $false
+    $observationJson = [Newtonsoft.Json.JsonConvert]::SerializeObject($unknown, [Shikari.Services.PlanJson]::Compact())
+    $roundTrip = [Newtonsoft.Json.JsonConvert]::DeserializeObject($observationJson, [Shikari.Model.StatusObservation], [Shikari.Services.PlanJson]::Compact())
+    Assert (!$roundTrip.ParameterKnown -and !$roundTrip.DurationKnown) 'Compact observation JSON changed unknown values into known zero'
     $null = $store.Import($plan, $false)
     Assert (!$plan.AdaptiveMechanics[0].Enabled) 'Imported automation was enabled without review'
     Assert ($plan.Slides[0].Items[0].Color -eq [Shikari.Model.CanvasItem]::DefaultAoeColor) 'Imported AoE not orange'
@@ -100,3 +123,4 @@ try {
 }
 Write-Host 'PASS: legacy and compact formats, references, Unicode, integrity, size bounds, backdrops, import colors and saved overrides'
 Write-Host 'PASS: adaptive format version, occurrence zero, exact parameter zero, branch references, disabled imported rules'
+Write-Host 'PASS: compound format compatibility, AND condition serialization, bounded invalid rules, unknown observation defaults'

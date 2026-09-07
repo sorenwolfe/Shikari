@@ -20,9 +20,20 @@ public static class PlanNormaliser
         doc.AdaptiveMechanics.RemoveAll(r => r == null);
         foreach (var rule in doc.AdaptiveMechanics)
         {
+            // Disable before repairing: truncating an AND expression would otherwise broaden an enabled rule.
+            if (!rule.IsValid(doc)) rule.Enabled = false;
             rule.Branches ??= new List<StatusBranch>();
             rule.Branches.RemoveAll(b => b == null);
+            if (rule.Branches.Count > 16) rule.Branches.RemoveRange(16, rule.Branches.Count - 16);
+            foreach (var branch in rule.Branches)
+            {
+                branch.AdditionalStatuses ??= new List<StatusCondition>();
+                branch.AdditionalStatuses.RemoveAll(c => c == null);
+                if (branch.AdditionalStatuses.Count > 3)
+                    branch.AdditionalStatuses.RemoveRange(3, branch.AdditionalStatuses.Count - 3);
+            }
         }
+        if (doc.AdaptiveMechanics.Count > 128) doc.AdaptiveMechanics.RemoveRange(128, doc.AdaptiveMechanics.Count - 128);
 
         if (doc.Slides.Count == 0)
             doc.Slides.Add(new Slide { Title = "Slide 1" });

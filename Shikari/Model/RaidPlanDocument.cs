@@ -41,13 +41,14 @@ public sealed class ArenaSettings
 /// <summary>A complete strategy sheet: roster, slides and timeline.</summary>
 public sealed class PlanDocument
 {
-    public const int CurrentFormatVersion = 2;
+    public const int CurrentFormatVersion = 3;
 
     private int formatVersion = 1;
     [DefaultValue(1)]
     public int FormatVersion
     {
-        get => AdaptiveMechanics is { Count: > 0 } ? Math.Max(2, formatVersion) : formatVersion;
+        get => AdaptiveMechanics?.Any(r => r?.Branches?.Any(b => b?.AdditionalStatuses is { Count: > 0 }) == true) == true
+            ? Math.Max(3, formatVersion) : AdaptiveMechanics is { Count: > 0 } ? Math.Max(2, formatVersion) : formatVersion;
         set => formatVersion = value;
     }
 

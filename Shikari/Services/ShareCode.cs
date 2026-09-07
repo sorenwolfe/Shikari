@@ -97,6 +97,7 @@ public static class ShareCode
 
             ValidateStructure(parsed);
             document = PlanNormaliser.Normalise(parsed);
+            foreach (var rule in document.AdaptiveMechanics) rule.Enabled = false;
             return true;
         }
         catch (Exception ex)
@@ -142,7 +143,9 @@ public static class ShareCode
     private static void ValidateStructure(PlanDocument plan)
     {
         if ((plan.AdaptiveMechanics?.Count ?? 0) > 128 ||
-            plan.AdaptiveMechanics?.Any(r => r == null || r.Branches == null || r.Branches.Count > 16 || r.Branches.Any(b => b == null)) == true)
+            plan.AdaptiveMechanics?.Any(r => r == null || r.Branches == null || r.Branches.Count > 16 ||
+                r.Branches.Any(b => b == null || b.AdditionalStatuses == null || b.AdditionalStatuses.Count > 3 ||
+                    b.AdditionalStatuses.Any(c => c == null))) == true)
             throw new InvalidDataException("Invalid adaptive mechanic rules or too many branches.");
         if ((plan.Roster?.Count ?? 0) > 48 || (plan.Slides?.Count ?? 0) > 256 ||
             (plan.Timeline?.Count ?? 0) > 4096)

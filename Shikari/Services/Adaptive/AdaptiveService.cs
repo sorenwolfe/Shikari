@@ -71,10 +71,10 @@ public sealed class AdaptiveService : IDisposable
         try
         {
             var player = Plugin.ObjectTable.LocalPlayer;
-            if (player == null) { tracker.Invalidate(); actorId = 0; }
+            if (player == null || player.IsDead) { tracker.Invalidate(); engine.InvalidateEvidence(); actorId = 0; }
             else
             {
-                if (actorId != player.EntityId) { tracker.Invalidate(); actorId = player.EntityId; }
+                if (actorId != player.EntityId) { tracker.Invalidate(); engine.InvalidateEvidence(); actorId = player.EntityId; }
                 var samples = player.StatusList.Select(s => new StatusSample(s.StatusId, s.RemainingTime, s.Param, s.SourceId)).ToArray();
                 observations = tracker.Observe(samples, time);
             }
@@ -82,6 +82,7 @@ public sealed class AdaptiveService : IDisposable
         catch
         {
             tracker.Invalidate();
+            engine.InvalidateEvidence();
             Status = "Status data unavailable; waiting for a fresh observation.";
         }
         foreach (var observation in observations)

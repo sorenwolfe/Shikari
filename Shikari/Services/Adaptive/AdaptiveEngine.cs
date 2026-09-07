@@ -27,6 +27,11 @@ public sealed class StatusTracker
                 result.Add(new StatusObservation { Time = time, StatusId = sample.Id, Duration = sample.Remaining,
                     Parameter = sample.Parameter, SourceId = sample.Source });
         }
+        if (ready)
+            foreach (var (key, sample) in previous)
+                if (!current.ContainsKey(key))
+                    result.Add(new StatusObservation { Time = time, StatusId = sample.Id,
+                        Parameter = sample.Parameter, SourceId = sample.Source, Removed = true });
         previous = current;
         ready = true;
         return result;
@@ -41,12 +46,24 @@ public sealed class AdaptiveEngine
         public required AdaptiveMechanic Rule;
         public float Start;
         public int Occurrence;
-        public float FirstMatch = -1;
-        public readonly Dictionary<int, StatusObservation> Matches = new();
+        public float SettledSince = -1;
+        public readonly Dictionary<(uint, uint), StatusObservation> Statuses = new();
+        public HashSet<int> Matches = new();
     }
     private readonly List<AdaptiveMechanic> rules;
     private readonly List<Armed> armed = new();
     public int ActiveRuleCount => rules.Count;
+    /// <summary>Unreadable or replaced actors cannot carry pending assignments across a gap.</summary>
+    public void InvalidateEvidence()
+    {
+        foreach (var state in armed)
+        {
+            state.Statuses.Clear();
+            state.Matches.Clear();
+            state.SettledSince = -1;
+        }
+    }
+
     public AdaptiveEngine(PlanDocument plan, uint territory)
     {
         var candidates = plan.AdaptiveMechanics.Take(128)
@@ -58,6 +75,7 @@ public sealed class AdaptiveEngine
 
     public void Arm(uint action, int occurrence, float time)
     {
+        if (!float.IsFinite(time) || time < 0) return;
         foreach (var rule in rules.Where(r => r.AnchorActionId == action && (r.Occurrence == 0 || r.Occurrence == occurrence)))
         {
             armed.RemoveAll(a => a.Rule == rule);
@@ -71,33 +89,46 @@ public sealed class AdaptiveEngine
         if (!float.IsFinite(time) || time < 0) return decisions;
         foreach (var state in armed.ToArray())
         {
+            var changed = false;
             foreach (var observed in observations)
             {
-                if (!float.IsFinite(observed.Time) || !float.IsFinite(observed.Duration) || observed.Duration < 0) continue;
-                if (observed.Time < state.Start || observed.Time > state.Start + state.Rule.WindowSeconds) continue;
-                for (var i = 0; i < state.Rule.Branches.Count; i++)
-                {
-                    var b = state.Rule.Branches[i];
-                    if (observed.StatusId != b.StatusId || observed.Duration < b.MinimumSeconds || observed.Duration >= b.MaximumSeconds ||
-                        (b.Parameter >= 0 && b.Parameter != observed.Parameter)) continue;
-                    state.Matches.TryAdd(i, observed);
-                    if (state.FirstMatch < 0) state.FirstMatch = time;
-                }
+                if (observed == null || !float.IsFinite(observed.Time) ||
+                    (observed.DurationKnown && (!float.IsFinite(observed.Duration) || observed.Duration < 0))) continue;
+                if (observed.Time < state.Start || observed.Time > time || observed.Time > state.Start + state.Rule.WindowSeconds) continue;
+                if (!state.Rule.Branches.Any(b => b.StatusId == observed.StatusId ||
+                    b.AdditionalStatuses.Any(c => c.StatusId == observed.StatusId))) continue;
+                var key = (observed.StatusId, observed.SourceId);
+                if (state.Statuses.TryGetValue(key, out var prior) &&
+                    (prior.Time > observed.Time || SameObservation(prior, observed))) continue;
+                state.Statuses[key] = observed;
+                changed = true;
             }
+            var matches = Enumerable.Range(0, state.Rule.Branches.Count)
+                .Where(i => Matches(state.Rule.Branches[i], state.Statuses.Values, time)).ToHashSet();
+            changed |= !matches.SetEquals(state.Matches);
+            state.Matches = matches;
+            if (matches.Count == 0) state.SettledSince = -1;
+            else if (changed || state.SettledSince < 0) state.SettledSince = time;
             var expired = time >= state.Start + state.Rule.WindowSeconds;
-            if (!expired && (state.FirstMatch < 0 || time - state.FirstMatch < .3f)) continue;
+            var settled = state.SettledSince >= 0 && time - state.SettledSince >= .3f;
+            if (!expired && !settled) continue;
             var decision = new AdaptiveDecision { Time = time, Mechanic = state.Rule.Label,
                 AnchorActionId = state.Rule.AnchorActionId, Occurrence = state.Occurrence };
-            if (state.Matches.Count == 1)
+            if (state.Matches.Count == 1 && settled)
             {
                 var match = state.Matches.First();
-                var b = state.Rule.Branches[match.Key];
-                var o = match.Value;
+                var b = state.Rule.Branches[match];
                 decision.SlideId = b.SlideId;
-                decision.Reason = $"{b.Label}: status #{o.StatusId}, initial observed duration {o.Duration:0.0}s, parameter {o.Parameter}, source #{o.SourceId}.";
+                var evidence = state.Statuses.Values.First(o => Matches(b.StatusId, b.Parameter, b.MinimumSeconds, b.MaximumSeconds, o, time));
+                decision.Reason = $"{b.Label}: status #{evidence.StatusId}, initial observed duration " +
+                    (evidence.DurationKnown ? $"{evidence.Duration:0.0}s" : "unknown") + ", parameter " +
+                    (evidence.ParameterKnown ? evidence.Parameter.ToString() : "unknown") + $", source #{evidence.SourceId}.";
+                if (b.AdditionalStatuses.Count > 0)
+                    decision.Reason += $" All {b.AdditionalStatuses.Count + 1} required statuses are active concurrently.";
             }
             else decision.Reason = state.Matches.Count == 0 ? "No matching status observed within the assignment window." :
-                "Conflicting branches matched; no destination selected.";
+                state.Matches.Count > 1 ? "Conflicting branches matched; no destination selected." :
+                "The complete assignment did not settle before the window closed; no destination selected.";
             decisions.Add(decision);
             armed.Remove(state);
         }
@@ -105,4 +136,18 @@ public sealed class AdaptiveEngine
             foreach (var d in decisions) { d.SlideId = ""; d.Reason += " Conflicting mechanics; navigation withheld."; }
         return decisions;
     }
+
+    private static bool Matches(StatusBranch branch, IEnumerable<StatusObservation> statuses, float time) =>
+        statuses.Any(o => Matches(branch.StatusId, branch.Parameter, branch.MinimumSeconds, branch.MaximumSeconds, o, time)) &&
+        branch.AdditionalStatuses.All(c => statuses.Any(o => Matches(c.StatusId, c.Parameter, c.MinimumSeconds, c.MaximumSeconds, o, time)));
+
+    private static bool Matches(uint id, int parameter, float minimum, float maximum, StatusObservation observed, float time) =>
+        observed.StatusId == id && !observed.Removed && !observed.Baseline &&
+        (!observed.DurationKnown || observed.Time + observed.Duration > time) &&
+        (parameter < 0 || observed.ParameterKnown && observed.Parameter == parameter) &&
+        (observed.DurationKnown ? observed.Duration >= minimum && observed.Duration < maximum : minimum == 0 && maximum == 3600);
+
+    private static bool SameObservation(StatusObservation a, StatusObservation b) =>
+        a.Time == b.Time && a.Duration == b.Duration && a.Parameter == b.Parameter && a.Removed == b.Removed &&
+        a.Baseline == b.Baseline && a.DurationKnown == b.DurationKnown && a.ParameterKnown == b.ParameterKnown;
 }
