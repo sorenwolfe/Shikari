@@ -28,7 +28,12 @@ public sealed class FfLogsClient : IDisposable
     private const string TokenUrl = "https://www.fflogs.com/oauth/token";
     private const string ApiUrl = "https://www.fflogs.com/api/v2/client";
 
-    private readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private readonly HttpClient http;
+
+    public FfLogsClient() => http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+    internal FfLogsClient(HttpMessageHandler handler) =>
+        http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
 
     private string token = string.Empty;
     private DateTime tokenExpiresUtc = DateTime.MinValue;
@@ -329,6 +334,110 @@ public sealed class FfLogsClient : IDisposable
         }
 
         return results.OrderBy(c => c.TimeSeconds).ToList();
+    }
+
+    /// <summary>Read optional status and sparse position evidence, bounded to 20 pages / 200,000
+    /// events. Partial reads carry warnings; caller cancellation always propagates.</summary>
+    public async Task<LogEvidence> GetEvidenceAsync(
+        string clientId, string secret, string code, LogFight fight, CancellationToken cancel = default)
+    {
+        cancel.ThrowIfCancellationRequested();
+        if (fight.Id <= 0 || fight.StartTime < 0 || fight.EndTime < fight.StartTime)
+            throw new ArgumentException("Invalid fight range.", nameof(fight));
+        var names = new Dictionary<uint, string>();
+        var parser = new LogEvidenceParser(fight, names);
+        var cursor = (double)fight.StartTime;
+        var count = 0;
+        var finished = false;
+        for (var page = 0; page < 20; page++)
+        {
+            cancel.ThrowIfCancellationRequested();
+            var master = page == 0 ? "masterData { abilities { gameID name } }" : string.Empty;
+            var query = $$"""
+            query {
+              reportData {
+                report(code: "{{Escape(code)}}") {
+                  {{master}}
+                  events(
+                    fightIDs: [{{fight.Id}}]
+                    dataType: All
+                    includeResources: true
+                    startTime: {{cursor.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}}
+                    endTime: {{fight.EndTime.ToString(System.Globalization.CultureInfo.InvariantCulture)}}
+                    limit: 10000
+                  ) { data nextPageTimestamp }
+                }
+              }
+            }
+            """;
+            JObject json;
+            try
+            {
+                json = await QueryAsync(clientId, secret, query, cancel).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+            {
+                parser.Warn("FF Logs evidence request timed out; the evidence is incomplete.", true);
+                break;
+            }
+            catch (Exception ex) when (ex is FfLogsException or HttpRequestException or JsonException)
+            {
+                parser.Warn("FF Logs evidence could not be fully retrieved; retry the import.", true);
+                break;
+            }
+            var report = json.SelectToken("data.reportData.report") as JObject;
+            if (report?["masterData"] is JObject masterData && masterData["abilities"] is JArray abilities)
+            {
+                foreach (var ability in abilities.OfType<JObject>())
+                {
+                    var id = LogEvidenceParser.Integer(ability["gameID"], 1, uint.MaxValue);
+                    if (id.HasValue && ability["name"]?.Type == JTokenType.String)
+                        names[(uint)id.Value] = ability.Value<string>("name") ?? string.Empty;
+                }
+            }
+            if (report?["events"] is not JObject events || events["data"] is not JArray rows)
+            {
+                parser.Warn("FF Logs returned no readable event page; the evidence is incomplete.", true);
+                break;
+            }
+            // The service can exceed limit slightly to finish a group at one timestamp.
+            if (count + (long)rows.Count > 200000)
+            {
+                parser.Warn("FF Logs evidence exceeded the event limit; the evidence is incomplete.", true);
+                break;
+            }
+            count += rows.Count;
+            parser.AddPage(rows, cancel);
+            var nextToken = events["nextPageTimestamp"];
+            if (nextToken?.Type == JTokenType.Null)
+            {
+                finished = true;
+                break;
+            }
+            if (!LogEvidenceParser.Number(nextToken, out var next) || next <= cursor || next > fight.EndTime)
+            {
+                parser.Warn("FF Logs returned an invalid pagination cursor; the evidence is incomplete.", true);
+                break;
+            }
+            cursor = next;
+        }
+        if (!finished && parser.Result.Complete)
+            parser.Warn("FF Logs evidence reached the page limit; the evidence is incomplete.", true);
+        parser.Warn("Log status IDs are candidates until validated against the game's Status sheet.");
+        parser.Warn("Log status parameters are unknown; stacks and extraInfo are not live status parameters.");
+        if (parser.Result.StatusEvents.Any(s => s.Duration == null))
+            parser.Warn("Some status durations are unknown; initial auras are baseline observations.");
+        parser.Warn(parser.Result.Positions.Count == 0
+            ? "No source positions were available in this pull."
+            : "Positions are sparse FF Logs centicoordinates and require calibration before overlaying the plan.");
+        // Stable ordering preserves the log's apply/remove order at identical timestamps.
+        var statuses = parser.Result.StatusEvents.OrderBy(s => s.Time).ToArray();
+        parser.Result.StatusEvents.Clear();
+        parser.Result.StatusEvents.AddRange(statuses);
+        var positions = parser.Result.Positions.OrderBy(p => p.Time).ToArray();
+        parser.Result.Positions.Clear();
+        parser.Result.Positions.AddRange(positions);
+        return parser.Result;
     }
 
     private static string Escape(string value) => value.Replace("\"", string.Empty).Replace("\\", string.Empty);
