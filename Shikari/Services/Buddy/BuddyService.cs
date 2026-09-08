@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
 using Newtonsoft.Json;
 using Shikari.Model;
@@ -10,6 +11,7 @@ namespace Shikari.Services.Buddy;
 public sealed class BuddyService : IDisposable
 {
     private readonly BuddyCueEngine cues = new();
+    private readonly BuddyAmbientController ambient = new();
     private readonly List<AdaptiveMechanic> rules = new();
     private BuddyContext previous;
     private bool initialized;
@@ -19,6 +21,7 @@ public sealed class BuddyService : IDisposable
     private int decidedOccurrence;
 
     public BuddyPresentation Presentation => cues.Presentation;
+    public BuddyAmbientPresentation Ambient => ambient.Presentation;
 
     public BuddyService()
     {
@@ -77,14 +80,26 @@ public sealed class BuddyService : IDisposable
 
     private void Refresh()
     {
+        if (disposed) return;
         var now = DateTime.UtcNow;
         uint playerId = 0;
         var dead = false;
+        var statusKnown = false;
+        var away = false;
         try
         {
             var player = Plugin.ObjectTable.LocalPlayer;
             playerId = player?.EntityId ?? 0;
             dead = player?.IsDead ?? false;
+            try
+            {
+                var status = player?.OnlineStatus.RowId ?? 0;
+                // OnlineStatus row 17 is Away from Keyboard, verified against the local
+                // 2026.08.11 game sheet. Zero/disconnected/offline rows provide no return signal.
+                statusKnown = player != null && status > 0 && status is not (5 or 9 or 10);
+                away = status == 17;
+            }
+            catch { /* Cosmetic status failure must not alter otherwise valid tactical cues. */ }
         }
         catch { /* Unreadable game objects invalidate every cue, not merely the status baseline. */ }
         var plan = Plugin.Plans.Active;
@@ -100,6 +115,24 @@ public sealed class BuddyService : IDisposable
         previous = next;
         initialized = true;
         cues.Update(next, now);
+        RefreshAmbient(now, playerId, dead, statusKnown, away);
+    }
+
+    private void RefreshAmbient(DateTime now, uint playerId, bool dead, bool statusKnown, bool away)
+    {
+        try
+        {
+            var suppressed = Plugin.ClientState.IsGPosing || Plugin.Condition[ConditionFlag.BetweenAreas] ||
+                Plugin.Condition[ConditionFlag.BetweenAreas51] || Plugin.Condition[ConditionFlag.LoggingOut] ||
+                Plugin.Condition[ConditionFlag.WatchingCutscene] || Plugin.Condition[ConditionFlag.WatchingCutscene78] ||
+                Plugin.Condition[ConditionFlag.OccupiedInCutSceneEvent];
+            var duty = Plugin.Condition[ConditionFlag.BoundByDuty] || Plugin.Condition[ConditionFlag.BoundByDuty56] ||
+                Plugin.Condition[ConditionFlag.BoundByDuty95];
+            ambient.Update(new BuddyAmbientContext(Plugin.Config.BuddyEnabled,
+                Plugin.ClientState.IsLoggedIn ? playerId : 0, Plugin.ClientState.TerritoryType, statusKnown, away, duty,
+                Plugin.Encounter.InCombat || Plugin.Condition[ConditionFlag.InCombat], dead, suppressed), now);
+        }
+        catch { ambient.Reset(now); }
     }
 
     private void Call(ActiveCall call)
@@ -176,5 +209,6 @@ public sealed class BuddyService : IDisposable
         Plugin.Adaptive.EvidenceInvalidated -= Invalidate;
         rules.Clear();
         cues.Clear(DateTime.UtcNow);
+        ambient.Reset(DateTime.UtcNow);
     }
 }

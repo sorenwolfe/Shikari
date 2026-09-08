@@ -6,6 +6,8 @@ namespace Shikari.UI;
 /// <summary>Screen-space placement independent of live game or ImGui state.</summary>
 public static class BuddyLayout
 {
+    public const float BaseSpriteSize = 132;
+    public const float MotionPadding = 28;
     public readonly record struct Placement(Vector2 Position, Vector2 Size, Vector2 SpriteMin,
         float SpriteSize, Vector2 BubbleMin, Vector2 BubbleSize, bool BubbleOnLeft);
 
@@ -15,7 +17,7 @@ public static class BuddyLayout
         var available = Vector2.Max(Vector2.One, Finite(viewport, Vector2.One));
         // Reserve room for the longest permitted cue and all shadow/motion insets. Text and
         // sprite shrink together only when a small viewport cannot hold the requested size.
-        return MathF.Min(Math.Clamp(requested, .25f, 6f), MathF.Min(available.X / 370f, available.Y / 330f));
+        return MathF.Min(Math.Clamp(requested, .25f, 6f), MathF.Min(available.X / 444f, available.Y / 370f));
     }
 
     public static Placement Place(Vector2 viewportPosition, Vector2 viewportSize, Vector2 anchor,
@@ -24,8 +26,8 @@ public static class BuddyLayout
         var viewport = Vector2.Max(Vector2.One, Finite(viewportSize, Vector2.One));
         anchor = Vector2.Clamp(Finite(anchor, new Vector2(.76f, .70f)), Vector2.Zero, Vector2.One);
         scale = float.IsFinite(scale) && scale > 0 ? MathF.Min(scale, FitScale(viewport, scale)) : FitScale(viewport, 1);
-        var spriteSize = 94f * scale;
-        var padding = 9f * scale;
+        var spriteSize = BaseSpriteSize * scale;
+        var padding = MotionPadding * scale;
         var spriteMin = viewportPosition + viewport * anchor - new Vector2(spriteSize / 2);
         var hasBubble = bubbleSize.X > 0 && bubbleSize.Y > 0;
         var onLeft = anchor.X >= .5f;
@@ -43,10 +45,6 @@ public static class BuddyLayout
 
     public static Vector2 Anchor(Vector2 spriteCenter, Vector2 viewportPosition, Vector2 viewportSize) =>
         Vector2.Clamp((spriteCenter - viewportPosition) / Vector2.Max(Vector2.One, viewportSize), Vector2.Zero, Vector2.One);
-
-    public static (float OffsetY, float Breath) Motion(double seconds, bool reducedMotion) => reducedMotion
-        ? (0, 1)
-        : ((float)Math.Sin(seconds * 1.7) * 1.35f, 1 + (float)Math.Sin(seconds * 2.1) * .006f);
 
     public static float Fade(double age, bool reducedMotion)
     {

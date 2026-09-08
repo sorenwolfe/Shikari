@@ -31,8 +31,7 @@ public static class BuddyLayoutTests
         Check(Vector2.Distance(right.Position + right.SpriteMin, quiet.Position + quiet.SpriteMin) < .01f, "Appearing speech must not move the creature when there is room");
         var anchorAgain = BuddyLayout.Anchor(right.Position + right.SpriteMin + new Vector2(right.SpriteSize / 2), Vector2.Zero, new Vector2(1920, 1080));
         Check(Vector2.Distance(anchorAgain, new Vector2(.8f, .7f)) < .001f, "Saved anchor must describe the creature, not the changing speech bubble");
-        Check(BuddyLayout.Motion(1.3, false).OffsetY != BuddyLayout.Motion(2.3, false).OffsetY, "Idle motion should advance gently");
-        Check(BuddyLayout.Motion(2.3, true) == (0f, 1f) && BuddyLayout.Fade(.01, true) == 1, "Reduced motion disables bob, breathing and transitions");
+        Check(BuddyLayout.Fade(.01, true) == 1, "Reduced motion disables cue transitions");
         Check(BuddyLayout.Fade(0, false) == 0 && BuddyLayout.Fade(1, false) == 1, "Cue animation must settle promptly");
         Console.WriteLine("Buddy layout: viewport fitting, stable anchors and reduced motion passed.");
     }

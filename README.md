@@ -91,7 +91,9 @@ Enable **Your view** under the mini board to hide other players' tokens and labe
 
 Check **Enable dragon buddy** in `/shikari config` to meet Ember. He stays quiet between mechanics and shows one short speech bubble for a personal timeline call or a detected Adaptive assignment. While a supported assignment is being determined, he can remind you to watch for your status effect. Unclear assignments stay unclear.
 
-The buddy is off by default and appears while a plan is active, independently of the mini window. Expand **Appearance and placement** to resize him, reduce motion, or unlock his position. Drag him outside combat, then lock him again; during pulls he always lets clicks pass through. Disabling the checkbox hides him immediately.
+Ember is off by default. Once enabled, he sits directly over the game with a transparent background, independently of the mini window or an active plan. He curls up with floating Zs when your character is AFK, perks up when you return, and looks focused in a duty. During personal calls, he turns his attention to the mechanic.
+
+In the buddy settings, check **Move Ember**, drag him to a comfortable spot, then uncheck it to lock his position. His position is saved, and he always lets clicks pass through during combat. Adjust **Buddy size** to suit your screen, or enable **Reduce buddy motion** to keep his poses without the movement and particles. Disabling the buddy hides him immediately.
 
 Ember uses your enabled timeline and Adaptive rules. Importing a guide alone doesn't teach him how to solve every mechanic. Assignment bubbles point to the selected board and respect your follow settings and manual navigation. Personal call bubbles follow the Calls switch; their delivery does not require the on-screen banner channel. If you enable him during a pull, he'll pick up new calls immediately and start watching for adaptive assignments on the next pull.
 

@@ -14,7 +14,7 @@ namespace Shikari.UI;
 /// <summary>A quiet, optional companion HUD. All assignment decisions belong to BuddyService.</summary>
 public sealed class BuddyWindow : Window, IDisposable
 {
-    private const string SpriteResource = "Shikari.Resources.buddy-dragon.png";
+    private const string SpriteResource = "Shikari.Resources.buddy-poses.png";
     private const ImGuiWindowFlags BaseFlags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove |
         ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.NoFocusOnAppearing |
         ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
@@ -27,6 +27,7 @@ public sealed class BuddyWindow : Window, IDisposable
     private Vector2 dragAnchor;
     private BuddyLayout.Placement placement;
     private BuddyPresentation presentation = new("", "", "", "", BuddyMood.Resting, false);
+    private BuddyMotion.Frame petFrame;
     private string cueKey = "";
     private double cueStarted;
     private float scale = 1;
@@ -50,7 +51,8 @@ public sealed class BuddyWindow : Window, IDisposable
     {
         var visible = Plugin.Config.BuddyEnabled && Plugin.ClientState.IsLoggedIn && !Plugin.ClientState.IsGPosing &&
             !Plugin.Condition[ConditionFlag.WatchingCutscene] && !Plugin.Condition[ConditionFlag.WatchingCutscene78] &&
-            !Plugin.Condition[ConditionFlag.OccupiedInCutSceneEvent] && Plugin.Plans.Active is { Slides.Count: > 0 };
+            !Plugin.Condition[ConditionFlag.OccupiedInCutSceneEvent] && !Plugin.Condition[ConditionFlag.BetweenAreas] &&
+            !Plugin.Condition[ConditionFlag.BetweenAreas51] && !Plugin.Condition[ConditionFlag.LoggingOut];
         if (!visible)
         {
             dragging = false;
@@ -61,13 +63,16 @@ public sealed class BuddyWindow : Window, IDisposable
 
     public override void PreDraw()
     {
-        var unlocked = Plugin.Config.BuddyUnlocked && !Plugin.Encounter.InCombat;
+        var unlocked = Plugin.Config.BuddyUnlocked && !Plugin.Encounter.InCombat && !Plugin.Condition[ConditionFlag.InCombat];
         Flags = unlocked ? BaseFlags : BaseFlags | ImGuiWindowFlags.NoInputs;
         if (!unlocked) dragging = false;
         presentation = Plugin.Buddy.Presentation;
+        var ambient = Plugin.Buddy.Ambient;
+        petFrame = BuddyMotion.Sample(ambient.State, ImGui.GetTime(), (DateTime.UtcNow - ambient.StartedAtUtc).TotalSeconds,
+            Plugin.Config.BuddyReducedMotion, presentation.HasCue, presentation.Mood == BuddyMood.Recovering);
         var viewport = ImGuiHelpers.MainViewport;
         var globalScale = float.IsFinite(UiHelpers.Scale) && UiHelpers.Scale > 0 ? UiHelpers.Scale : 1;
-        var requestedScale = float.IsFinite(Plugin.Config.BuddyScale) ? Math.Clamp(Plugin.Config.BuddyScale, .65f, 1.6f) : 1;
+        var requestedScale = float.IsFinite(Plugin.Config.BuddyScale) ? Math.Clamp(Plugin.Config.BuddyScale, .65f, 2f) : 1;
         scale = BuddyLayout.FitScale(viewport.Size, requestedScale * globalScale);
         fontSize = ImGui.GetFontSize() * scale / globalScale;
         textWidth = 212f * scale;
@@ -75,7 +80,7 @@ public sealed class BuddyWindow : Window, IDisposable
         var bubble = presentation.HasCue ? new Vector2(240 * scale, MathF.Max(40 * scale,
             24 * scale + headingHeight + bodyHeight + detailHeight +
             (body.Length > 0 ? 7 * scale : 0) + (detail.Length > 0 ? 8 * scale : 0))) : Vector2.Zero;
-        var fit = MathF.Min(1, viewport.Size.Y / (MathF.Max(94 * scale, bubble.Y) + 18 * scale));
+        var fit = MathF.Min(1, viewport.Size.Y / (MathF.Max(BuddyLayout.BaseSpriteSize * scale, bubble.Y) + 2 * BuddyLayout.MotionPadding * scale));
         if (fit > 0 && fit < 1)
         {
             // Respect unusual user fonts as well as the normal 9-line layout estimate.
@@ -159,34 +164,42 @@ public sealed class BuddyWindow : Window, IDisposable
 
     private void DrawPet(ImDrawListPtr draw, Vector2 min)
     {
-        var motion = BuddyLayout.Motion(ImGui.GetTime(), Plugin.Config.BuddyReducedMotion);
         var size = placement.SpriteSize;
-        var accent = presentation.Mood == BuddyMood.Uncertain ? 0xD6AB79u : Palette.DefaultAccent;
         var max = min + new Vector2(size);
-        // A small portrait pod intentionally contains the original artwork's black background.
-        // Its rounded silhouette stays quiet when no actionable cue is available.
-        draw.AddRectFilled(min + new Vector2(-3, 4) * scale, max + new Vector2(3, 7) * scale,
-            Palette.Pack(0x000000, .13f), 22 * scale);
-        var breathSize = size * motion.Breath;
-        var spriteMin = min + new Vector2((size - breathSize) / 2, size - breathSize + motion.OffsetY * scale);
-        var spriteMax = spriteMin + new Vector2(breathSize);
-        draw.AddRectFilled(spriteMin, spriteMax, Palette.Pack(0x000000, .90f), 18 * scale);
+        var frame = placement.BubbleOnLeft ? petFrame with { Offset = new Vector2(-petFrame.Offset.X, petFrame.Offset.Y), Rotation = -petFrame.Rotation } : petFrame;
+        var quad = BuddyMotion.Corners(min, size, frame);
+        var uv = BuddyMotion.Uvs(petFrame.Pose, placement.BubbleOnLeft);
+        // The atlas carries real alpha. Draw only the creature, without a portrait background.
         if (TrySprite(out var handle))
-            draw.AddImageRounded(handle, spriteMin, spriteMax,
-                placement.BubbleOnLeft ? new Vector2(1, 0) : Vector2.Zero,
-                placement.BubbleOnLeft ? new Vector2(0, 1) : Vector2.One, 0xFFFFFFFF, 18 * scale);
+            draw.AddImageQuad(handle, quad.A, quad.B, quad.C, quad.D, uv.Min, new Vector2(uv.Max.X, uv.Min.Y),
+                uv.Max, new Vector2(uv.Min.X, uv.Max.Y), 0xFFFFFFFF);
         else
-            DrawFallback(draw, spriteMin, breathSize);
-        draw.AddRect(spriteMin, spriteMax, Palette.Pack(accent, presentation.HasCue ? .28f : .12f),
-            18 * scale, ImDrawFlags.None, MathF.Max(1, scale));
+            DrawFallback(draw, min, size);
+
+        foreach (var particle in petFrame.Particles)
+        {
+            var offset = particle.Offset;
+            if (placement.BubbleOnLeft) offset.X = -offset.X;
+            var at = min + new Vector2(size / 2) + offset * size;
+            var radius = particle.Size * scale;
+            var color = Palette.Pack(particle.Sleep ? 0xCDD2E5u : 0xFFD39Au, particle.Alpha);
+            if (particle.Sleep)
+                draw.AddText(ImGui.GetFont(), radius, at - new Vector2(radius / 3, radius / 2), color, "z", 0);
+            else
+            {
+                draw.AddLine(at - new Vector2(radius, 0), at + new Vector2(radius, 0), color, scale);
+                draw.AddLine(at - new Vector2(0, radius), at + new Vector2(0, radius), color, scale);
+            }
+        }
 
         if ((Flags & ImGuiWindowFlags.NoInputs) == 0)
         {
-            var chrome = Palette.Pack(0xFFFFFF, .5f);
-            draw.AddLine(min + new Vector2(size - 18 * scale, 10 * scale), min + new Vector2(size - 9 * scale, 10 * scale), chrome, scale);
-            draw.AddLine(min + new Vector2(size - 18 * scale, 14 * scale), min + new Vector2(size - 9 * scale, 14 * scale), chrome, scale);
-            if (ImGui.IsWindowHovered(ImGuiHoveredFlags.AllowWhenBlockedByActiveItem) && Inside(ImGui.GetMousePos(), min, max))
-                UiHelpers.Tooltip("Drag Ember to move. Lock position in Settings when you're ready.");
+            var chrome = Palette.Pack(0xFFFFFF, .6f);
+            var grip = min + new Vector2(size / 2, size + 9 * scale);
+            draw.AddLine(grip - new Vector2(13, 0) * scale, grip + new Vector2(13, 0) * scale, chrome, 2 * scale);
+            draw.AddLine(grip - new Vector2(7, -4) * scale, grip + new Vector2(7, 4) * scale, chrome, 2 * scale);
+            if (ImGui.IsWindowHovered(ImGuiHoveredFlags.AllowWhenBlockedByActiveItem) && Inside(ImGui.GetMousePos(), min, max + new Vector2(0, 18 * scale)))
+                UiHelpers.Tooltip("Drag to move. Turn off Move Ember in Settings to lock.");
         }
     }
 
@@ -269,7 +282,7 @@ public sealed class BuddyWindow : Window, IDisposable
         var center = min + new Vector2(placement.SpriteSize / 2);
         var mouse = ImGui.GetMousePos();
         if (!dragging && ImGui.IsWindowHovered(ImGuiHoveredFlags.AllowWhenBlockedByActiveItem) &&
-            Inside(mouse, min, min + new Vector2(placement.SpriteSize)) && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            Inside(mouse, min, min + new Vector2(placement.SpriteSize, placement.SpriteSize + 18 * scale)) && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
             dragging = true;
             dragGrab = mouse - center;
