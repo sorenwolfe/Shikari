@@ -1,7 +1,7 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
 
   <PropertyGroup>
-    <Version>0.9.3.0</Version>
+    <Version>0.9.4.0</Version>
     <Description>In-game raid strategy planner with slide-based arena diagrams, per-player cooldown assignments and live shotcall reminders.</Description>
     <Authors>SorenWolfe</Authors>
     <PackageProjectUrl>https://github.com/sorenwolfe/Shikari</PackageProjectUrl>
