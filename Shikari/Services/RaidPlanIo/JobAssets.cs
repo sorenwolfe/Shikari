@@ -58,6 +58,9 @@ public static class JobAssets
         if (string.IsNullOrEmpty(stem))
             return default;
 
+        // The site's own job catalog uses bard.png, while the ClassJob abbreviation is BRD.
+        if (stem.Equals("bard", StringComparison.OrdinalIgnoreCase)) stem = "BRD";
+
         if (Roles.TryGetValue(stem, out var role))
             return new TokenIdentity(role, 0);
 

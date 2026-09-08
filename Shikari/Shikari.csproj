@@ -11,6 +11,9 @@
 
   <!-- Theme sprites ride inside the DLL, so there is no loose file to go missing on an install. -->
   <ItemGroup>
+    <EmbeddedResource Include="Resources\Emoji\*.png" LogicalName="Shikari.Resources.Emoji.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Resources\Emoji\index.txt" LogicalName="Shikari.Resources.Emoji.index.txt" />
+    <EmbeddedResource Include="Resources\Emoji\LICENSE-GRAPHICS.txt" LogicalName="Shikari.Resources.Emoji.LICENSE-GRAPHICS.txt" />
     <EmbeddedResource Include="Resources\shadow.png" LogicalName="Shikari.Resources.shadow.png" />
     <EmbeddedResource Include="Resources\glow.png" LogicalName="Shikari.Resources.glow.png" />
     <EmbeddedResource Include="Resources\buddy-dragon.png" LogicalName="Shikari.Resources.buddy-dragon.png" />

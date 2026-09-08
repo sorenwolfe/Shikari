@@ -118,11 +118,13 @@ public sealed class AdaptiveEngine
             var settled = state.SettledSince >= 0 && time - state.SettledSince >= .3f && state.SettledSince + .3f <= deadline;
             if (!expired && !settled) continue;
             var decision = new AdaptiveDecision { Time = time, Mechanic = state.Rule.Label,
-                AnchorActionId = state.Rule.AnchorActionId, Occurrence = state.Occurrence };
+                AnchorActionId = state.Rule.AnchorActionId, Occurrence = state.Occurrence,
+                RuleId = state.Rule.Id, Conflict = state.Matches.Count > 1 };
             if (state.Matches.Count == 1 && settled)
             {
                 var match = state.Matches.First();
                 var b = state.Rule.Branches[match];
+                decision.BranchIndex = match;
                 decision.SlideId = b.SlideId;
                 var evidence = eligible.First(o => Matches(b.StatusId, b.Parameter, b.MinimumSeconds, b.MaximumSeconds, o, time));
                 decision.Reason = $"{b.Label}: status #{evidence.StatusId}, initial observed duration " +
@@ -138,7 +140,7 @@ public sealed class AdaptiveEngine
             armed.Remove(state);
         }
         if (decisions.Where(d => d.SlideId.Length > 0).Select(d => d.SlideId).Distinct().Count() > 1)
-            foreach (var d in decisions) { d.SlideId = ""; d.Reason += " Conflicting mechanics; navigation withheld."; }
+            foreach (var d in decisions) { d.SlideId = ""; d.BranchIndex = -1; d.Conflict = true; d.Reason += " Conflicting mechanics; navigation withheld."; }
         return decisions;
     }
 

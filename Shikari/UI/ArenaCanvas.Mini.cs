@@ -5,6 +5,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Shikari.Model;
 using Shikari.Services.Live;
+using Shikari.Services.Symbols;
 
 namespace Shikari.UI;
 
@@ -48,8 +49,9 @@ public sealed partial class ArenaCanvas
         draw.AddCircleFilled(at, 9 * UiHelpers.Scale, MiniInk, 24);
         draw.AddCircle(at, 9 * UiHelpers.Scale, item.Color | 0xFF000000, 24, 1.5f * UiHelpers.Scale);
         var label = string.IsNullOrWhiteSpace(item.Text) ? "B" : item.Text;
-        UiHelpers.CenteredShadowText(draw, at, label.Length <= 2 ? label : "B", 0xFFFFFFFF);
-        if (label.Length > 2) miniLabels.Add((at, label.Length > 12 ? label[..11] + "…" : label, item.Color | 0xFF000000, 3));
+        var shortLabel = System.Globalization.StringInfo.ParseCombiningCharacters(label).Length <= 2;
+        UiHelpers.CenteredShadowText(draw, at, shortLabel ? label : "B", 0xFFFFFFFF);
+        if (!shortLabel) miniLabels.Add((at, EmojiCatalog.Truncate(label, 12), item.Color | 0xFF000000, 3));
     }
     private void DrawMiniToken(ImDrawListPtr draw, PlanDocument plan, CanvasItem item, Vector2 at)
     {
@@ -146,11 +148,15 @@ public sealed partial class ArenaCanvas
         }
         foreach (var label in miniLabels.OrderBy(l => l.Priority))
         {
-            var textSize = UiHelpers.TextSize(label.Text);
+            // Whole graphemes can expand into wider fallback words. Fit the displayed text,
+            // not only its original character count, before reserving and drawing its box.
+            var text = MiniMapLayout.FitLabel(label.Text, new Vector2(side) - new Vector2(18, 13) * UiHelpers.Scale, UiHelpers.TextSize);
+            if (text.Length == 0) continue;
+            var textSize = UiHelpers.TextSize(text);
             var box = MiniMapLayout.Place(label.Anchor, textSize + new Vector2(10, 5) * UiHelpers.Scale,
                 origin + new Vector2(4 * UiHelpers.Scale), origin + new Vector2(side - 4 * UiHelpers.Scale), miniOccupied, (label.Priority == 0 ? 21 : 9) * UiHelpers.Scale);
             if (label.Priority > 0 && miniPlaced.Any(p => box.Overlaps(p.Box))) continue;
-            miniPlaced.Add((box, label.Anchor, label.Text, label.Color, label.Priority));
+            miniPlaced.Add((box, label.Anchor, text, label.Color, label.Priority));
             miniOccupied.Add(new MiniMapLayout.Box(box.Min - new Vector2(2 * UiHelpers.Scale), box.Max + new Vector2(2 * UiHelpers.Scale)));
         }
         // All leader lines go under all captions. Draw the personal labels last if space is tight.

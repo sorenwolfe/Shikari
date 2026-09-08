@@ -28,6 +28,14 @@ public sealed class RaidPlanIoReport
     /// <summary>How many of those named an actual job rather than just a role.</summary>
     public int JobsRecognised { get; set; }
 
+    public int EmojiSymbols { get; set; }
+    public int GameIconSymbols { get; set; }
+    public int DiagramSymbols { get; set; }
+    public int FallbackSymbols { get; set; }
+
+    /// <summary>Artwork without a supported identifier remains positioned as a readable fallback.</summary>
+    public Dictionary<string, int> SymbolFallbacks { get; } = new(StringComparer.Ordinal);
+
     public Dictionary<string, int> ByType { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public Dictionary<string, int> Skipped { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -49,7 +57,11 @@ public sealed class RaidPlanIoReport
         if (NotesMoved > 0)
             text += $" {NotesMoved} text box(es) became slide notes.";
 
-        var dropped = Skipped.Where(p => p.Key.ToLowerInvariant() is not ("arena" or "itext" or "emoji"))
+        var symbols = EmojiSymbols + GameIconSymbols + DiagramSymbols + FallbackSymbols;
+        if (symbols > 0)
+            text += $" {symbols} positioned symbol(s) retained ({EmojiSymbols} emoji, {GameIconSymbols} game icons, {DiagramSymbols} diagrams, {FallbackSymbols} labelled fallbacks).";
+
+        var dropped = Skipped.Where(p => p.Key.ToLowerInvariant() is not ("arena" or "itext"))
             .Sum(p => p.Value);
         if (dropped > 0)
             text += $" {dropped} object(s) had no equivalent and were left out.";
@@ -206,6 +218,11 @@ public static class RaidPlanIoImporter
 
         ApplySlideNotes(parsed, slideByStep, report);
 
+        if (report.EmojiSymbols + report.GameIconSymbols + report.DiagramSymbols + report.FallbackSymbols > 0)
+            report.Notes.Insert(0, $"Board symbols retained: {report.EmojiSymbols} emoji, {report.GameIconSymbols} game artwork icons, {report.DiagramSymbols} diagrams and {report.FallbackSymbols} labelled artwork fallbacks. Artwork IDs are not status IDs.");
+        foreach (var pair in report.SymbolFallbacks)
+            report.Notes.Add($"Artwork retained as a labelled symbol: {pair.Key} ({pair.Value} object(s)); source artwork was not downloaded.");
+
         foreach (var pair in report.Unsupported)
             report.Notes.Add($"Unsupported {pair.Key}: {pair.Value} object(s) left out.");
 
@@ -240,7 +257,23 @@ public static class RaidPlanIoImporter
     private static PlanFrame BuildFrame(IReadOnlyList<Node> parsed, IReadOnlyList<Vector2> onBoard)
     {
         if (!TryWaymarkCentre(parsed, out var centre) || centre.Y <= 1f)
+        {
+            var visible = parsed.Where(n => n.Type is not ("arena" or "itext")).ToArray();
+            if (visible.Length > 0 && visible.All(n => n.Type == "emoji" || n.Type == "marker" &&
+                    !string.IsNullOrWhiteSpace(n.Asset) && !RaidPlanSymbolAssets.IsJobOrRole(n.Asset)))
+            {
+                // A diagram made entirely of symbols has no other landmarks. Use artwork
+                // bounds here; including a single center alone would produce a one-pixel frame.
+                var corners = new List<Vector2>();
+                foreach (var symbol in visible)
+                    foreach (var x in new[] { -1, 1 })
+                        foreach (var y in new[] { -1, 1 })
+                            corners.Add(symbol.Position + Rotate(new Vector2(MathF.Max(1, symbol.Width) * x / 2,
+                                MathF.Max(1, symbol.Height) * y / 2), symbol.Angle));
+                return PlanFrame.Fit(corners, Padding);
+            }
             return PlanFrame.Fit(onBoard, Padding);
+        }
 
         var frame = PlanFrame.FromArena(centre, centre.Y * ArenaFraction, ArenaEdge);
 
@@ -340,15 +373,18 @@ public static class RaidPlanIoImporter
                 return null;
 
             case "marker":
-                return Marker(node, frame, doc, seats, bound);
+                return string.IsNullOrWhiteSpace(node.Asset) || RaidPlanSymbolAssets.IsJobOrRole(node.Asset)
+                    ? Marker(node, frame, doc, seats, bound) : Symbol(node, frame, report);
 
             case "waypoint":
                 return Waymark(node, frame);
 
-            // Handled as notes, not as things on the board.
+            // Written explanations remain notes; positioned emoji carry spatial meaning.
             case "itext":
-            case "emoji":
                 return null;
+
+            case "emoji":
+                return Symbol(node, frame, report);
 
             case "circle":
                 return Zone(node, frame, ZoneShape.Circle);
@@ -374,6 +410,41 @@ public static class RaidPlanIoImporter
                 Bump(report.Unsupported, "object type '" + node.Type + "'");
                 return null;
         }
+    }
+
+    private static CanvasItem Symbol(Node node, PlanFrame frame, RaidPlanIoReport report)
+    {
+        var item = Base(node, frame, CanvasItemKind.Symbol);
+        item.Extent = new Vector2(frame.Length(node.Width * .5f), frame.Length(node.Height * .5f));
+        item.FlipX = node.FlipX;
+        item.FlipY = node.FlipY;
+        item.Color = node.OpacityColour("color", 0xFFFFFFFF);
+        item.Text = SymbolValidation.Caption(node.Text);
+        if (node.Type == "emoji" && SymbolValidation.IsSingleGrapheme(node.Emoji))
+        {
+            item.Emoji = node.Emoji!;
+            report.EmojiSymbols++;
+        }
+        else if (node.Type == "marker" && RaidPlanSymbolAssets.TryGameIcon(node.Asset, out var icon))
+        {
+            item.IconId = icon;
+            report.GameIconSymbols++;
+        }
+        else if (node.Type == "marker" && RaidPlanSymbolAssets.TryDiagram(node.Asset, out var diagram))
+        {
+            item.SymbolAsset = diagram;
+            report.DiagramSymbols++;
+        }
+        else
+        {
+            var source = node.Type == "emoji" ? "unreadable emoji" : SymbolValidation.Caption(node.Asset);
+            if (source.Length == 0) source = "unknown artwork";
+            Bump(report.SymbolFallbacks, source);
+            report.FallbackSymbols++;
+            if (item.Text.Length == 0) item.Text = node.Type == "emoji" ? "Unknown emoji" : RaidPlanSymbolAssets.Fallback(node.Asset);
+        }
+        SymbolValidation.Normalise(item);
+        return item;
     }
 
     private static CanvasItem Marker(
@@ -553,7 +624,7 @@ public static class RaidPlanIoImporter
     private static void ApplySlideNotes(
         IReadOnlyList<Node> nodes, Dictionary<int, Slide> slideByStep, RaidPlanIoReport report)
     {
-        foreach (var group in nodes.Where(n => n.Type is "itext" or "emoji").GroupBy(n => n.Step))
+        foreach (var group in nodes.Where(n => n.Type == "itext").GroupBy(n => n.Step))
         {
             if (!slideByStep.TryGetValue(group.Key, out var slide))
                 continue;
@@ -562,7 +633,7 @@ public static class RaidPlanIoImporter
             var lines = group
                 .OrderBy(n => n.Position.Y)
                 .ThenBy(n => n.Position.X)
-                .Select(n => (n.Type == "emoji" ? n.Emoji : n.Text) ?? string.Empty)
+                .Select(n => n.Text ?? string.Empty)
                 .Select(t => t.Replace("\r\n", "\n").Trim())
                 .Where(t => t.Length > 0)
                 .ToList();
@@ -660,6 +731,9 @@ public static class RaidPlanIoImporter
 
         public float Angle { get; init; }
 
+        public bool FlipX { get; init; }
+        public bool FlipY { get; init; }
+
         public string? Text { get; init; }
 
         public string? WayId { get; init; }
@@ -704,8 +778,9 @@ public static class RaidPlanIoImporter
 
             var scaleX = scale?.Value<float?>("x") ?? 1f;
             var scaleY = scale?.Value<float?>("y") ?? 1f;
-            var width = (size?.Value<float?>("w") ?? (type == "ability" ? 100f : 0f)) * MathF.Abs(scaleX);
-            var height = (size?.Value<float?>("h") ?? (type == "ability" ? 100f : 0f)) * MathF.Abs(scaleY);
+            var defaultSize = type == "ability" ? 100f : type == "emoji" ? 36f : 0f;
+            var width = (size?.Value<float?>("w") ?? defaultSize) * MathF.Abs(scaleX);
+            var height = (size?.Value<float?>("h") ?? defaultSize) * MathF.Abs(scaleY);
             var angle = meta.Value<float?>("angle") ?? 0f;
             var position = new Vector2(pos?.Value<float?>("x") ?? 0f, pos?.Value<float?>("y") ?? 0f);
             var origin = meta["origin"] as JObject;
@@ -724,6 +799,8 @@ public static class RaidPlanIoImporter
                 Width = width,
                 Height = height,
                 Angle = angle,
+                FlipX = (meta["flip"]?.Value<bool?>("x") ?? false) ^ (scaleX < 0),
+                FlipY = (meta["flip"]?.Value<bool?>("y") ?? false) ^ (scaleY < 0),
                 Text = attr.Value<string>("text"),
                 WayId = attr.Value<string>("wayId"),
                 AbilityId = attr.Value<string>("abilityId"),

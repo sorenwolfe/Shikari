@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Shikari.Model;
+using Shikari.Services.Symbols;
 
 namespace Shikari.UI;
 
@@ -27,6 +28,7 @@ public static class MiniMapLayout
         CanvasItemKind.EnemyToken => 1,
         CanvasItemKind.PlayerToken => 4,
         CanvasItemKind.Waymark => 3,
+        CanvasItemKind.Symbol => 3,
         _ => 2,
     };
 
@@ -52,7 +54,20 @@ public static class MiniMapLayout
         var text = !string.IsNullOrWhiteSpace(item.Text) ? item.Text : slot?.Placeholder;
         if (string.IsNullOrWhiteSpace(text)) text = slot?.DisplayName;
         if (string.IsNullOrWhiteSpace(text) || text == "?") text = slot != null ? $"P{item.SlotIndex + 1}" : "—";
-        return text.Length > 7 ? text[..6] + "…" : text;
+        return EmojiCatalog.Truncate(text, 7);
+    }
+
+    public static string FitLabel(string text, Vector2 available, Func<string, Vector2> measure)
+    {
+        text = text.Replace('\r', ' ').Replace('\n', ' ');
+        var elements = System.Globalization.StringInfo.ParseCombiningCharacters(text).Length;
+        for (var count = elements; count > 0; count--)
+        {
+            var candidate = EmojiCatalog.Truncate(text, count);
+            var size = measure(candidate);
+            if (size.X <= available.X && size.Y <= available.Y) return candidate;
+        }
+        return "";
     }
 
     public readonly record struct Box(Vector2 Min, Vector2 Max)

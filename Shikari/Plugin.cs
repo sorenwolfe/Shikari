@@ -314,6 +314,7 @@ public sealed class Plugin : IDalamudPlugin
         Safely(Backdrops.Dispose, "drop the backdrop textures");
         Safely(Fonts.Dispose, "release the font handles");
         Safely(Sprites.Forget, "drop the sprite handles");
+        Safely(EmojiArtwork.Forget, "drop the emoji handles");
 
         Safely(WindowSystem.RemoveAllWindows, "remove the windows");
         Safely(mainWindow.Dispose, "dispose the planner window");

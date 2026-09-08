@@ -57,8 +57,15 @@ public sealed class LiteralData
             {
                 var key = tokens[at++];
                 if (key.Text == "...") obj["$spread" + obj.Count] = Value(depth + 1);
-                else if (Eat(":")) obj[key.Text] = Value(depth + 1);
-                else if (Current is "," or "}") obj[key.Text] = new JObject { ["$ref"] = key.Text };
+                else if (Eat(":"))
+                {
+                    var child = Value(depth + 1);
+                    // Repeated object keys take their final source position as well as value;
+                    // a spread between two declarations must not override the last one.
+                    SetLast(obj, key.Text, child);
+                }
+                else if (Current is "," or "}")
+                { SetLast(obj, key.Text, new JObject { ["$ref"] = key.Text }); }
                 else { SkipExpression(); obj["$unsupported-property"] = Unsupported("Computed property or method"); }
                 if (!Eat(",")) break;
             }
@@ -80,7 +87,20 @@ public sealed class LiteralData
         else if (token.Text == "null") result = JValue.CreateNull();
         else if (double.TryParse(token.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)) result = new JValue(number);
         else if (token.Text == "-" && double.TryParse(Current, NumberStyles.Float, CultureInfo.InvariantCulture, out number)) { at++; result = new JValue(-number); }
-        else if (token.Text.Length > 0 && (char.IsLetter(token.Text[0]) || token.Text[0] is '_' or '$')) result = new JObject { ["$ref"] = token.Text };
+        else if (Identifier(token))
+        {
+            var reference = new JObject { ["$ref"] = token.Text };
+            var members = new JArray();
+            while (Eat("."))
+            {
+                if (at >= tokens.Count || !Identifier(tokens[at]))
+                { SkipExpression(); return Unsupported("Computed member access"); }
+                members.Add(tokens[at++].Text);
+                if (members.Count > 64) throw new InvalidDataException("Member path is too deep.");
+            }
+            if (members.Count > 0) reference["$path"] = members;
+            result = reference;
+        }
         else { at--; SkipExpression(); return Unsupported("Expression"); }
 
         if (Eat("+"))
@@ -92,6 +112,10 @@ public sealed class LiteralData
         if (Current is not ("," or ";" or "}" or "]" or "")) { SkipExpression(); return Unsupported("Computed expression"); }
         return result;
     }
+
+    private static bool Identifier(Token token) => !token.Quoted && token.Text.Length > 0 &&
+        (char.IsLetter(token.Text[0]) || token.Text[0] is '_' or '$') &&
+        token.Text.All(c => char.IsLetterOrDigit(c) || c is '_' or '$');
 
     private void SkipExpression()
     {
@@ -118,15 +142,25 @@ public sealed class LiteralData
             {
                 var name = reference.ToString();
                 if (!raw.TryGetValue(name, out var target) || !path.Add(name)) return Unsupported("Unresolved constant: " + name);
-                var result = Resolve(target, raw, path, depth + 1, ref budget); path.Remove(name); return result;
+                var members = (obj["$path"] as JArray)?.Values<string>().Select(s => s ?? "").ToArray() ?? Array.Empty<string>();
+                var result = SelectLiteral(target, members, raw, path, depth + 1, ref budget);
+                path.Remove(name); return result;
             }
             var resolved = new JObject();
             foreach (var p in obj.Properties())
             {
                 var child = Resolve(p.Value, raw, path, depth + 1, ref budget);
-                if (p.Name.StartsWith("$spread", StringComparison.Ordinal) && child is JObject spread && !IsUnsupported(spread))
-                    foreach (var field in spread.Properties()) resolved[field.Name] = field.Value.DeepClone();
-                else resolved[p.Name] = child;
+                if (p.Name.StartsWith("$spread", StringComparison.Ordinal))
+                {
+                    if (child is JObject spread && !IsUnsupported(spread))
+                    {
+                        foreach (var field in spread.Properties())
+                            if (field.Name.StartsWith("$spread", StringComparison.Ordinal)) UnknownSpread(resolved, field.Name);
+                            else SetLast(resolved, field.Name, field.Value.DeepClone());
+                    }
+                    else UnknownSpread(resolved, p.Name);
+                }
+                else SetLast(resolved, p.Name, child);
             }
             return resolved;
         }
@@ -146,6 +180,47 @@ public sealed class LiteralData
             return resolved;
         }
         return value.DeepClone();
+    }
+
+    private static void UnknownSpread(JObject target, string marker)
+    {
+        // An unknown source could supply any key. Earlier fields therefore cannot be
+        // selected with certainty; explicit fields after it will restore their certainty.
+        foreach (var field in target.Properties().Where(p => !p.Name.StartsWith("$spread", StringComparison.Ordinal)).ToArray())
+            field.Value = Unsupported("An unresolved spread may override this field");
+        SetLast(target, marker, Unsupported("Unresolved object spread"));
+    }
+
+    private static void SetLast(JObject target, string name, JToken value)
+    { target.Remove(name); target[name] = value; }
+
+    // Select a named field before expanding unrelated branches. Idyllic guide variants reuse
+    // large literal tables; resolving whole tables for each member wastes the bounded budget.
+    private static JToken SelectLiteral(JToken value, string[] members, Dictionary<string, JToken> raw,
+        HashSet<string> path, int depth, ref int budget)
+    {
+        if (--budget <= 0 || depth > 64 || members.Length > 64)
+            throw new InvalidDataException("Guide references expand beyond the supported limit.");
+        if (members.Length == 0) return Resolve(value, raw, path, depth + 1, ref budget);
+        if (value is not JObject obj || IsUnsupported(value)) return Unsupported("Member is not literal object data");
+        if (obj["$ref"] is JValue)
+        {
+            var reference = (JObject)obj.DeepClone();
+            var preceding = (reference["$path"] as JArray)?.Values<string>().Select(s => s ?? "") ?? Enumerable.Empty<string>();
+            reference["$path"] = new JArray(preceding.Concat(members));
+            return Resolve(reference, raw, path, depth + 1, ref budget);
+        }
+        // Respect spread precedence before selecting a field; a later spread can override it.
+        if (obj.Properties().Any(p => p.Name.StartsWith("$spread", StringComparison.Ordinal)))
+        {
+            var resolved = Resolve(obj, raw, path, depth + 1, ref budget);
+            if (resolved is not JObject materialized || IsUnsupported(materialized))
+                return Unsupported("Unresolved member source");
+            obj = materialized;
+        }
+        return obj.TryGetValue(members[0], StringComparison.Ordinal, out var child)
+            ? SelectLiteral(child, members.Skip(1).ToArray(), raw, path, depth + 1, ref budget)
+            : Unsupported("Missing literal member: " + members[0]);
     }
 
     private static List<Token> Lex(string source)

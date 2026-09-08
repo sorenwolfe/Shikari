@@ -17,7 +17,7 @@ public static class ReplayValidation
             attempt.Plan.Roster.Any(r => r == null) || attempt.Plan.Timeline.Any(e => e == null)) return false;
         if (attempt.Plan.FormatVersion > PlanDocument.CurrentFormatVersion ||
             !StrategyEvidenceValidation.IsValid(attempt.Plan) || !SlideMetadataValidation.ValidArena(attempt.Plan.Arena) ||
-            attempt.Plan.Slides.Any(s => !SlideMetadataValidation.IsValid(s))) return false;
+            attempt.Plan.Slides.Any(s => !SlideMetadataValidation.IsValid(s) || s.Items.Any(i => !SymbolValidation.IsValid(i)))) return false;
         var last = -1f;
         var evidence = attempt.Evidence;
         if (evidence == null || evidence.Actors == null || evidence.Statuses == null || evidence.Positions == null ||
@@ -37,7 +37,8 @@ public static class ReplayValidation
             attempt.StatusObservations.Count > 4096 || attempt.AdaptiveDecisions.Count > 1024 ||
             attempt.StatusObservations.Any(s => s == null || !float.IsFinite(s.Time) || s.Time < 0 || s.Time > attempt.Duration ||
                 !float.IsFinite(s.Duration) || s.Duration < 0) ||
-            attempt.AdaptiveDecisions.Any(d => d == null || !float.IsFinite(d.Time) || d.Time < 0 || d.Time > attempt.Duration)) return false;
+            attempt.AdaptiveDecisions.Any(d => d == null || !float.IsFinite(d.Time) || d.Time < 0 || d.Time > attempt.Duration ||
+                d.RuleId == null || d.RuleId.Length > 128 || d.BranchIndex is < -1 or > 15)) return false;
         foreach (var frame in attempt.Frames)
         {
             if (frame == null || !float.IsFinite(frame.Time) || frame.Time < 0 || frame.Time <= last || frame.Time > attempt.Duration ||

@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 $sources = @(Get-ChildItem "$root/Shikari/Model/*.cs" | ForEach-Object FullName)
 $sources += "$root/Shikari/UI/MiniMapLayout.cs", "$root/Shikari/Services/Live/StandingSpot.cs", "$root/Shikari/UI/ArenaCanvas.Mini.cs", "$PSScriptRoot/MiniRendererHarness.cs"
+$sources += "$root/Shikari/Services/Symbols/EmojiCatalog.cs"
 $refs = @(Get-ChildItem "$PSHOME/ref/*.dll" | ForEach-Object FullName) + "$PSHOME/Newtonsoft.Json.dll", "$PSHOME/System.Drawing.Common.dll", "$PSHOME/System.Private.Windows.GdiPlus.dll", "$PSHOME/System.Private.Windows.Core.dll"
 Add-Type -Path $sources -ReferencedAssemblies $refs -CompilerOptions '/nullable:enable','/nowarn:1701'
 [Shikari.UI.ArenaCanvas]::CheckArrival()

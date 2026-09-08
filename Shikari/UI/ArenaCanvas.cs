@@ -625,9 +625,13 @@ public sealed partial class ArenaCanvas
                 var size = UiHelpers.TextSize(text);
                 var pos = centre - (size * 0.5f);
                 drawList.AddRectFilled(pos - new Vector2(4, 2), pos + size + new Vector2(4, 2), 0x90000000, 3f);
-                drawList.AddText(pos, item.Color, text);
+                CanvasText.Draw(drawList, pos, text, item.Color);
                 break;
             }
+
+            case CanvasItemKind.Symbol:
+                CanvasSymbols.Draw(drawList, item, centre, side, MiniPresentation);
+                break;
 
             case CanvasItemKind.Arrow:
                 DrawArrow(drawList, item);
@@ -912,6 +916,11 @@ public sealed partial class ArenaCanvas
 
     private void DrawSelectionHint(ImDrawListPtr drawList, CanvasItem item, Vector2 centre)
     {
+        if (item.Kind == CanvasItemKind.Symbol)
+        {
+            CanvasSymbols.Outline(drawList, item, centre, side, MiniPresentation);
+            return;
+        }
         var r = Len(MathF.Max(item.Radius, 0.03f)) + 5f;
 
         if (item.Kind is CanvasItemKind.Arrow or CanvasItemKind.Tether or CanvasItemKind.Freehand && item.Points.Count > 0)
@@ -1168,6 +1177,8 @@ public sealed partial class ArenaCanvas
 
                 CanvasItemKind.Label =>
                     Vector2.Distance(item.Position, position) <= 0.05f,
+
+                CanvasItemKind.Symbol => SymbolGeometry.Contains(item, position),
 
                 CanvasItemKind.Zone =>
                     HitZone(item, position),

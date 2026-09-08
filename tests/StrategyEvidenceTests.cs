@@ -53,6 +53,11 @@ public static class StrategyEvidenceTests
         Check(plan.AdaptiveMechanics.Count == 1 && !plan.AdaptiveMechanics[0].Enabled, "Reliable observed assignment yields disabled draft");
         var json = JsonConvert.SerializeObject(plan);
         Check(!StrategyEnrichment.Apply(plan, attempt).Changed && JsonConvert.SerializeObject(plan) == json, "Repeat attachment must be idempotent");
+        var sameObservation = JsonConvert.DeserializeObject<ReplayAttempt>(JsonConvert.SerializeObject(attempt))!;
+        sameObservation.Id = Guid.NewGuid().ToString("N");
+        result = StrategyEnrichment.Apply(plan, sameObservation);
+        Check(result.DraftsAdded == 0 && plan.AdaptiveMechanics.Count == 1 && plan.StrategyEvidence.Count == 2,
+            "A repeated condition from a new recording adds evidence without duplicating an identical disabled candidate.");
 
         (plan, attempt) = Fixture();
         plan.Timeline[0].CastActionId = 42; plan.Timeline[0].SortTime = 9; plan.Timeline[0].Label = "Authored label";

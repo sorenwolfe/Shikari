@@ -26,7 +26,7 @@ public sealed class CanvasItem
     /// <summary>Centre of the item, normalised.</summary>
     public Vector2 Position { get; set; } = new(0.5f, 0.5f);
 
-    /// <summary>Half-extents for rectangles, normalised. Ignored by most kinds.</summary>
+    /// <summary>Half-extents for rectangles and symbols, normalised. Ignored by most kinds.</summary>
     public Vector2 Extent { get; set; } = new(0.1f, 0.1f);
 
     /// <summary>Radius for circular kinds, normalised against arena width.</summary>
@@ -41,6 +41,13 @@ public sealed class CanvasItem
     [DefaultValue(0f)]
     public float Rotation { get; set; }
 
+    /// <summary>Mirror symbol artwork within its bounds before rotation.</summary>
+    [DefaultValue(false)]
+    public bool FlipX { get; set; }
+
+    [DefaultValue(false)]
+    public bool FlipY { get; set; }
+
     /// <summary>Total sweep of a cone, in degrees.</summary>
     [DefaultValue(90f)]
     public float ConeAngle { get; set; } = 90f;
@@ -53,11 +60,19 @@ public sealed class CanvasItem
     [DefaultValue("")]
     public string Text { get; set; } = string.Empty;
 
+    /// <summary>A whole Unicode grapheme for a positioned symbol; never a status identifier.</summary>
+    [DefaultValue("")]
+    public string Emoji { get; set; } = string.Empty;
+
+    /// <summary>A bounded built-in diagram, independent of emoji and game artwork.</summary>
+    [DefaultValue(SymbolAsset.None)]
+    public SymbolAsset SymbolAsset { get; set; }
+
     /// <summary>Roster slot this token is bound to, or -1 for an unbound token.</summary>
     [DefaultValue(-1)]
     public int SlotIndex { get; set; } = -1;
 
-    /// <summary>Optional game icon drawn inside the token.</summary>
+    /// <summary>Game artwork ID for a token or symbol. This is not an action or status row ID.</summary>
     [DefaultValue(0u)]
     public uint IconId { get; set; }
 
@@ -91,7 +106,15 @@ public sealed class CanvasItem
     public bool ShouldSerializePosition() => !IsPath;
 
     public bool ShouldSerializeExtent() =>
-        Kind == CanvasItemKind.Zone && Zone is ZoneShape.Rectangle or ZoneShape.Line or ZoneShape.Cross;
+        Kind == CanvasItemKind.Symbol || Kind == CanvasItemKind.Zone && Zone is ZoneShape.Rectangle or ZoneShape.Line or ZoneShape.Cross;
+
+    public bool ShouldSerializeEmoji() => Kind == CanvasItemKind.Symbol && !string.IsNullOrEmpty(Emoji);
+
+    public bool ShouldSerializeSymbolAsset() => Kind == CanvasItemKind.Symbol && SymbolAsset != SymbolAsset.None;
+
+    public bool ShouldSerializeFlipX() => Kind == CanvasItemKind.Symbol && FlipX;
+
+    public bool ShouldSerializeFlipY() => Kind == CanvasItemKind.Symbol && FlipY;
 
     public bool ShouldSerializeRadius() => IsToken || Kind == CanvasItemKind.Zone;
 
@@ -118,9 +141,13 @@ public sealed class CanvasItem
             Radius = Radius,
             InnerRadius = InnerRadius,
             Rotation = Rotation,
+            FlipX = FlipX,
+            FlipY = FlipY,
             ConeAngle = ConeAngle,
             Color = Color,
             Text = Text,
+            Emoji = Emoji,
+            SymbolAsset = SymbolAsset,
             SlotIndex = SlotIndex,
             IconId = IconId,
             Zone = Zone,

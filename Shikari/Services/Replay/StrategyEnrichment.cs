@@ -147,7 +147,7 @@ public static class StrategyEnrichment
                 var draft = EvidenceRules.Draft(attempt, mechanic, fresh, row.SlideId, attempt.TerritoryId);
                 draft.Id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{key}:{mechanic.ActionId}:{mechanic.Occurrence}:{actorRow.SlotIndex}")))[..32].ToLowerInvariant();
                 // Keep deliberate edits to earlier drafts and never enable an observed rule.
-                if (!draft.IsValid(plan) || plan.AdaptiveMechanics.Any(r => r.Id == draft.Id)) continue;
+                if (!draft.IsValid(plan) || plan.AdaptiveMechanics.Any(r => r.Id == draft.Id) || EvidenceRules.ContainsDraft(plan, draft)) continue;
                 plan.AdaptiveMechanics.Add(draft); drafts++; changed = true;
             }
             attachment.Mechanics.Add(row);
@@ -238,7 +238,7 @@ public static class StrategyEnrichment
         return groups.ToArray();
     }
 
-    static bool SameGeometry(PlanDocument current, PlanDocument snapshot, string slideId)
+    internal static bool SameGeometry(PlanDocument current, PlanDocument snapshot, string slideId)
     {
         var currentSlide = current.FindSlide(slideId);
         var recordedSlide = snapshot.FindSlide(slideId);
@@ -254,7 +254,7 @@ public static class StrategyEnrichment
         return Fingerprint(current, currentSlide) == Fingerprint(snapshot, recordedSlide);
     }
 
-    static bool SameSeat(PlanDocument plan, PlanDocument snapshot, int slot) => plan.Id == snapshot.Id && slot >= 0 &&
+    internal static bool SameSeat(PlanDocument plan, PlanDocument snapshot, int slot) => plan.Id == snapshot.Id && slot >= 0 &&
         slot < plan.Roster.Count && slot < snapshot.Roster.Count && plan.Roster[slot].Name == snapshot.Roster[slot].Name &&
         plan.Roster[slot].JobId == snapshot.Roster[slot].JobId && plan.Roster[slot].Placeholder == snapshot.Roster[slot].Placeholder;
 

@@ -239,10 +239,16 @@ public sealed partial class MainWindow
         if (evidenceDraft == null || Plan?.Id != attempt.Plan.Id || Plugin.Encounter.InCombat) return;
         var plan = Plan;
         if (plan.AdaptiveMechanics.Count >= 128 || !evidenceDraft.IsValid(plan)) { evidenceMessage = "The plan no longer supports this draft."; return; }
+        if (EvidenceRules.ContainsDraft(plan, evidenceDraft))
+        { evidenceDraft = null; evidenceMessage = "These exact conditions and destinations are already in the plan. Check their recording coverage in Adaptive."; return; }
         var existing = plan.AdaptiveMechanics.FirstOrDefault(r => !r.Enabled && r.TerritoryId == evidenceDraft.TerritoryId &&
-            r.AnchorActionId == evidenceDraft.AnchorActionId && r.Occurrence == evidenceDraft.Occurrence && r.Branches.Count < 16);
+            r.AnchorActionId == evidenceDraft.AnchorActionId && r.Occurrence == evidenceDraft.Occurrence &&
+            r.WindowSeconds == evidenceDraft.WindowSeconds && r.Branches.Count < 16);
         if (existing == null) plan.AdaptiveMechanics.Add(evidenceDraft);
-        else { existing.Branches.AddRange(evidenceDraft.Branches); existing.WindowSeconds = Math.Max(existing.WindowSeconds, evidenceDraft.WindowSeconds); }
+        else
+        {
+            existing.Branches.AddRange(evidenceDraft.Branches.Where(branch => !existing.Branches.Any(candidate => EvidenceRules.SameBranch(candidate, branch))));
+        }
         evidenceDraft = null;
         MarkDirty();
         evidenceMessage = "Disabled assignment added. Open Plan → Adaptive to review it and add the other outcomes.";
@@ -270,6 +276,8 @@ public sealed partial class MainWindow
 
     private void SaveEvidenceEdits(ReplayAttempt attempt)
     {
+        // Metadata has already changed in memory, even if validation or disk save later fails.
+        InvalidateAssignmentCoverage();
         try
         {
             if (Plan?.Id == attempt.Plan.Id && !Plugin.Encounter.InCombat)

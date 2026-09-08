@@ -60,6 +60,10 @@ Use **Import a saved file** for a raidplan JSON file or a Shikari share-code tex
 
 Editable boards keep their source links and arena settings. When a diagram cannot be converted, its guide notes and available reference image remain. Guide images alone don't provide calibrated Live positions. Imported and newly inferred timeline entries stay disabled until you review them.
 
+Emoji and recognized game artwork stay on the board as editable mechanic symbols, including the dragons and status pictures in Caro's Grotesquerie diagrams. They remain visible in **Your view**. Select a symbol in Slides to change its size, rotation, or fallback caption. Emoji artwork is included with Shikari and works without a separate download; see [artwork credits](docs/emoji-artwork.md).
+
+If an older import lost these pictures, import the original link again. Missing artwork cannot be recovered from a saved plan that no longer contains it. Plans containing these symbols require the updated client when shared. An unfamiliar picture gets a visible caption and an import notice; pictures alone don't establish a live buff or debuff condition.
+
 You can import a WTFDIG strategy first and then paste an FF Logs fight link into the same bar. Shikari matches casts to existing mechanics where the action or name is unambiguous, adds missing timing references, and keeps observed statuses beside them. A match to a whole phase can add timing without guessing which of its boards is your destination. **Strategy references** shows what matched and what remains unresolved. Finished local recordings also enrich the unchanged active plan.
 
 Position comparisons need alignment. Use matching landmarks in Review to align FF Logs coordinates; sparse or missing observations stay unresolved. When enough evidence supports an assignment, Shikari can add a disabled Adaptive draft. A player standing somewhere in a log doesn't prove that spot was safe, so review the rule and its other outcomes before enabling it.
@@ -113,6 +117,10 @@ Recording and saved-attempt controls are under **Review → Recording & storage*
 4. Select the relevant statuses, set the duty, and use **Test selected assignment**. If the result fits the strategy, choose **Add disabled rule to plan**, then review its conditions in **Plan → Adaptive** before enabling it.
 
 The test checks one recorded player's assignment. Check the other possible assignments and more pulls before relying on the rule. Guide prose and example positions don't automatically establish which outcome is correct.
+
+In **Plan → Adaptive**, expand a rule and choose **Check recordings** between pulls. Shikari runs its assignment conditions against your retained local recordings and imported FF Logs fights. The report shows which outcomes have examples, which are still missing, and where conditions conflict or the recording is incomplete. **Review this example** opens the recording at the relevant player and moment.
+
+Repeated imports of the same FF Logs fight count once. Local and log recordings can describe the same pull, so the report counts recordings, not independent attempts. Encounter identity must match before an example contributes to branch coverage. Where the seat, board, alignment, and timing also match, Shikari shows the observed distance from the authored spot at the expected cast end. This helps compare assignments; it does not judge whether the mechanic succeeded. Changes to a rule, board, seat, or recording clear the previous report so you can check it again.
 
 Log positions appear on a source map because their coordinates differ from the plan. **Overlay on strategy** needs three known landmarks entered in both coordinate systems. Alignment belongs to that slide; missing position samples remain gaps. When comparing pulls, Shikari lines them up at the same cast occurrence.
 

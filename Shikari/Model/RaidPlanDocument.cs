@@ -41,13 +41,15 @@ public sealed class ArenaSettings
 /// <summary>A complete strategy sheet: roster, slides and timeline.</summary>
 public sealed class PlanDocument
 {
-    public const int CurrentFormatVersion = 4;
+    public const int CurrentFormatVersion = 5;
 
     private int formatVersion = 1;
     [DefaultValue(1)]
     public int FormatVersion
     {
-        get => StrategyEvidence is { Count: > 0 } || Timeline?.Any(e => e != null && (e.InferredCastActionId != 0 || e.EvidenceCreated)) == true || Slides?.Any(s => s != null &&
+        get => Slides?.Any(s => s?.Items?.Any(i => i?.Kind == CanvasItemKind.Symbol) == true) == true
+            ? Math.Max(5, formatVersion)
+            : StrategyEvidence is { Count: > 0 } || Timeline?.Any(e => e != null && (e.InferredCastActionId != 0 || e.EvidenceCreated)) == true || Slides?.Any(s => s != null &&
                    (s.ArenaOverride != null || !string.IsNullOrEmpty(s.SourceUrl) || !string.IsNullOrEmpty(s.GuideUrl) || !string.IsNullOrEmpty(s.SourceLabel) || s.SourceStep >= 0)) == true
             ? Math.Max(4, formatVersion)
             : AdaptiveMechanics?.Any(r => r?.Branches?.Any(b => b?.AdditionalStatuses is { Count: > 0 }) == true) == true

@@ -59,6 +59,9 @@ public sealed class StatusBranch
 
 public sealed class AdaptiveDecision
 {
+    [DefaultValue("")] public string RuleId { get; set; } = "";
+    [DefaultValue(-1)] public int BranchIndex { get; set; } = -1;
+    [DefaultValue(false)] public bool Conflict { get; set; }
     public uint AnchorActionId { get; set; }
     public int Occurrence { get; set; }
     public float Time { get; set; }

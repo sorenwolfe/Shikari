@@ -168,6 +168,7 @@ public static class ShareCode
                 foreach (var item in slide.Items)
                 {
                     if (item == null) throw new InvalidDataException("A slide contains an empty drawing entry.");
+                    if (!SymbolValidation.IsValid(item)) throw new InvalidDataException("Invalid or oversized board symbol.");
                     points += item.Points?.Count ?? 0;
                 }
             }

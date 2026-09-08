@@ -12,6 +12,8 @@ public static class PlanNormaliser
 {
     public static PlanDocument Normalise(PlanDocument doc)
     {
+        if (doc.FormatVersion > PlanDocument.CurrentFormatVersion)
+            throw new System.IO.InvalidDataException($"Plan format {doc.FormatVersion} requires a newer version of Shikari.");
         doc.Arena ??= new ArenaSettings();
         SlideMetadataValidation.NormaliseArena(doc.Arena);
         doc.Roster ??= new List<PlayerSlot>();
@@ -47,7 +49,10 @@ public static class PlanNormaliser
             SlideMetadataValidation.Normalise(slide, doc.Arena);
             slide.Items ??= new List<CanvasItem>();
             foreach (var item in slide.Items)
+            {
                 item.Points ??= new List<System.Numerics.Vector2>();
+                SymbolValidation.Normalise(item);
+            }
         }
 
         foreach (var entry in doc.Timeline)

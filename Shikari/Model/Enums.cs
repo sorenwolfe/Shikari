@@ -48,6 +48,16 @@ public enum CanvasItemKind
 
     /// <summary>Freehand pen strokes.</summary>
     Freehand = 7,
+
+    /// <summary>Positioned mechanic artwork or an emoji, independent of player seats.</summary>
+    Symbol = 8,
+}
+
+/// <summary>Small, explicitly supported diagrams whose geometry is owned by the renderer.</summary>
+public enum SymbolAsset
+{
+    None = 0,
+    Cut4 = 1,
 }
 
 /// <summary>Geometry of a <see cref="CanvasItemKind.Zone"/>.</summary>

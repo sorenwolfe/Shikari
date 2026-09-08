@@ -42,7 +42,7 @@ indices when the source contains empty steps.
 
 Run the offline synthetic geometry regression with `pwsh -NoProfile -File tests/raidplan-areas.ps1`.
 Pass a downloaded JSON filename as its first argument for the optional exact-board
-check: 21 slides, 458 objects, 49 note boxes retained, no unsupported drawable
+check: 21 slides, 459 objects including one positioned emoji, 48 text boxes retained as notes, no unsupported drawable
 objects. The role lookup is stubbed in this focused harness; full builds use the
 production role lookup.
 
@@ -64,3 +64,39 @@ still uses the waymarks. Circles/donuts do not have an ellipse model, skew is no
 represented, and sampled pencil curves approximate continuous Béziers. SVG command
 paths without packed pencil points are reported once as unsupported path geometry.
 Existing stack/boss/push icons and triangle/cone translations simplify their artwork.
+
+Positioned emoji and native game artwork are now separate editable Symbols. Their
+coordinates, rectangular bounds, rotation and mirror flags survive import and sharing;
+they do not become player seats or relocate into the notes. Unknown marker artwork
+retains a labelled fallback and an explicit report entry. See the Act 1 fixture and
+`tests/raidplan-symbols.ps1` for symbol fidelity checks. Native artwork numbers must not
+be interpreted as status IDs or proof that a diagram's example is the current assignment.
+
+The 2026-09-08 six-board Caro corpus retains all 195 emoji and all 346 non-job
+marker pictures as 344 native game icons and two built-in four-person diagrams.
+No marker artwork falls back to a label in that corpus. This covers symbols, not
+pixel-identical conversion of the whole board; the geometry/background limits above
+still apply. The source's `bard.png` job alias is recognized as BRD rather than
+mistaken for an unknown mechanic picture.
+
+Two exact source marker names have verified native equivalents:
+
+| Source artwork | Native game icon | Verification |
+| --- | --- | --- |
+| [mark_link1.png](https://cdn.raidplan.io/game/ffxiv/mark/mark_link1.png) | 61211 | Compared source PNG with decoded `ui/icon/061000/061211_hr1.tex`: purple chain, numeral 1, 80×80. |
+| [mark_stop1.png](https://cdn.raidplan.io/game/ffxiv/mark/mark_stop1.png) | 61221 | Compared source PNG with decoded `ui/icon/061000/061221_hr1.tex`: red prohibition mark, numeral 1, 80×80. |
+
+The designs match; minor antialiasing/color differences remain between the source
+and native versions. Other numbered target-marker IDs are not inferred by arithmetic.
+[cut/4.svg](https://cdn.raidplan.io/game/ffxiv/cut/4.svg) is represented by the bounded
+`SymbolAsset.Cut4` diagram, not a game icon: its 88×44 viewbox has four radius-9.5
+circles at (33,11), (55,11), (33,33), (55,33), white fill with 10% `#F81F2C` overlay
+and a one-unit red stroke. It remains one editable symbol with source bounds,
+rotation, mirrors and opacity. The renderer constructs this simple geometry locally;
+no arbitrary source SVG or remote URL is executed or loaded during drawing.
+
+Symbol plans advertise plan format 5. Existing older share/replay format guards
+reject these plans rather than silently discard symbol fields; current disk loading
+also rejects future formats. Previously shipped disk readers cannot be retroactively
+changed by this format marker, so reopening a new-format saved plan in an old plugin
+version is not a supported downgrade path.

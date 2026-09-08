@@ -31,6 +31,8 @@ public sealed class ReplayStore : IDisposable
     private volatile string status = string.Empty;
 
     public IReadOnlyList<ReplayAttempt> Attempts => attempts;
+    /// <summary>Changes whenever retained evidence or its seat/calibration metadata changes.</summary>
+    public long EvidenceRevision { get; private set; }
     public bool Recording => buffer != null;
     public string Status => status;
 
@@ -64,6 +66,7 @@ public sealed class ReplayStore : IDisposable
         buffer.Attempt.AdaptiveDecisions.Add(new AdaptiveDecision { Time = (float)clock.Elapsed.TotalSeconds,
             AnchorActionId = decision.AnchorActionId, Occurrence = decision.Occurrence,
             Mechanic = decision.Mechanic, SlideId = decision.SlideId, Reason = decision.Reason,
+            RuleId = decision.RuleId, BranchIndex = decision.BranchIndex, Conflict = decision.Conflict,
             Applied = decision.Applied, Navigation = decision.Navigation });
     }
 
@@ -102,6 +105,7 @@ public sealed class ReplayStore : IDisposable
             {
                 attempts.AddRange(loading.Result.Where(a => attempts.All(current => current.Id != a.Id)));
                 attempts.Sort((a, b) => b.StartedUtc.CompareTo(a.StartedUtc));
+                EvidenceRevision++;
             }
             Trim();
         }
@@ -217,6 +221,7 @@ public sealed class ReplayStore : IDisposable
         var json = JsonConvert.SerializeObject(attempt, PlanJson.Compact());
         if (System.Text.Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
             throw new IOException("This replay exceeds the local file size limit.");
+        EvidenceRevision++;
         Queue(() =>
         {
             Directory.CreateDirectory(directory);
@@ -234,6 +239,7 @@ public sealed class ReplayStore : IDisposable
     {
         if (!Guid.TryParseExact(id, "N", out _)) return;
         attempts.RemoveAll(a => a.Id == id);
+        EvidenceRevision++;
         Queue(() => { var path = PathFor(id); if (File.Exists(path)) File.Delete(path); });
     }
 
@@ -243,6 +249,7 @@ public sealed class ReplayStore : IDisposable
         // files deleted in the UI. Update ignores the load result once loaded is true.
         loaded = true;
         attempts.Clear();
+        EvidenceRevision++;
         Queue(() =>
         {
             if (!Directory.Exists(directory)) return;

@@ -9,6 +9,21 @@ namespace Shikari.Services.Replay;
 
 public static class EvidenceRules
 {
+    /// <summary>Source IDs and cosmetic labels do not make the same authored predicate a new rule.</summary>
+    public static bool ContainsDraft(PlanDocument plan, AdaptiveMechanic draft) => plan.AdaptiveMechanics.Any(existing =>
+        existing.TerritoryId == draft.TerritoryId && existing.AnchorActionId == draft.AnchorActionId &&
+        existing.Occurrence == draft.Occurrence && existing.WindowSeconds == draft.WindowSeconds &&
+        draft.Branches.All(branch => existing.Branches.Any(candidate => SameBranch(candidate, branch))));
+
+    public static bool SameBranch(StatusBranch left, StatusBranch right)
+    {
+        if (left.SlideId != right.SlideId) return false;
+        static IEnumerable<(uint, int, float, float)> Conditions(StatusBranch branch) => branch.AdditionalStatuses
+            .Select(c => (c.StatusId, c.Parameter, c.MinimumSeconds, c.MaximumSeconds))
+            .Append((branch.StatusId, branch.Parameter, branch.MinimumSeconds, branch.MaximumSeconds))
+            .OrderBy(c => c.Item1).ThenBy(c => c.Item2).ThenBy(c => c.Item3).ThenBy(c => c.Item4);
+        return Conditions(left).SequenceEqual(Conditions(right));
+    }
     public static AdaptiveMechanic Draft(ReplayAttempt attempt, ReplayMechanic anchor,
         IReadOnlyList<EvidenceStatus> statuses, string slideId, uint territory)
     {
@@ -43,7 +58,9 @@ public static class EvidenceRules
         var plan = new PlanDocument { Slides = attempt.Plan.Slides, AdaptiveMechanics = new() { rule } };
         var engine = new AdaptiveEngine(plan, rule.TerritoryId);
         var result = new List<AdaptiveDecision>();
-        var events = attempt.Evidence.Statuses.Where(s => s.ActorId == actorId).OrderBy(s => s.Time).ToArray();
+        var relevant = rule.Branches.SelectMany(b => b.AdditionalStatuses.Select(c => c.StatusId).Append(b.StatusId)).ToHashSet();
+        var events = attempt.Evidence.Statuses.Where(s => s.ActorId == actorId && (s.Change == "unavailable" || relevant.Contains(s.StatusId)))
+            .OrderBy(s => s.Time).ToArray();
         foreach (var anchor in attempt.Mechanics.Where(m => m.ActionId == rule.AnchorActionId &&
                      (rule.Occurrence == 0 || m.Occurrence == rule.Occurrence)))
         {
@@ -65,7 +82,11 @@ public static class EvidenceRules
                         DurationKnown = e.Duration.HasValue, Parameter = (ushort)(e.Parameter ?? 0),
                         ParameterKnown = e.Parameter.HasValue, Baseline = e.Baseline, Removed = e.Change == "remove" });
                 }
-                result.AddRange(engine.Update(observations, time));
+                var decisions = engine.Update(observations, time);
+                result.AddRange(decisions);
+                // This simulation has one rule and one armed occurrence. Its state is removed
+                // on delivery, so later ticks cannot produce another decision for this anchor.
+                if (decisions.Count > 0) break;
             }
         }
         return result;

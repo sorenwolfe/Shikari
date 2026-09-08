@@ -518,15 +518,20 @@ public sealed partial class MainWindow
         ImGui.TextDisabled($"Selected: {item.Kind}");
         ImGui.Separator();
 
-        if (item.Kind is CanvasItemKind.Label or CanvasItemKind.EnemyToken or CanvasItemKind.PlayerToken)
+        if (item.Kind is CanvasItemKind.Label or CanvasItemKind.EnemyToken or CanvasItemKind.PlayerToken or CanvasItemKind.Symbol)
         {
             ImGui.SetNextItemWidth(-1);
             var text = item.Text;
-            if (UiHelpers.InputTextHint("##item-text", "Caption", ref text, 64))
+            if (UiHelpers.InputTextHint("##item-text", item.Kind == CanvasItemKind.Symbol ? "Fallback caption" : "Caption", ref text, 64))
             {
                 item.Text = text;
                 MarkDirty();
             }
+        }
+
+        if (item.Kind == CanvasItemKind.Symbol)
+        {
+            DrawSymbolProperties(item);
         }
 
         if (item.Kind == CanvasItemKind.PlayerToken)
@@ -663,7 +668,7 @@ public sealed partial class MainWindow
             }
         }
 
-        if (item.Kind is CanvasItemKind.Zone or CanvasItemKind.Label)
+        if (item.Kind is CanvasItemKind.Zone or CanvasItemKind.Label or CanvasItemKind.Symbol)
         {
             var rotation = item.Rotation;
             ImGui.SetNextItemWidth(-1);

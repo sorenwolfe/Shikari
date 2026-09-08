@@ -52,7 +52,7 @@ public static class UiHelpers
     // callback delegate. Wrapping the handful of calls we make keeps the rest of the UI readable
     // and avoids ambiguity between the two callback delegate shapes.
 
-    public static Vector2 TextSize(string text) => ImGui.CalcTextSize(text, false, -1f);
+    public static Vector2 TextSize(string text) => CanvasText.Measure(text);
 
     public static bool InputText(string label, ref string value, int maxLength = 512,
         ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)
@@ -158,8 +158,8 @@ public static class UiHelpers
 
         var size = TextSize(text);
         var pos = centre - (size * 0.5f);
-        drawList.AddText(pos + new Vector2(1, 1), 0xC0000000, text);
-        drawList.AddText(pos, colour, text);
+        CanvasText.Draw(drawList, pos + new Vector2(1, 1), text, 0xC0000000, drawEmoji: false);
+        CanvasText.Draw(drawList, pos, text, colour);
     }
 
     /// <summary>A small square swatch that opens a colour picker when clicked.</summary>

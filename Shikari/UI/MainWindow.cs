@@ -46,6 +46,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
         Size = new Vector2(1100, 720);
         SizeCondition = ImGuiCond.FirstUseEver;
+        Plugin.Encounter.CombatStarted += CancelAssignmentCheck;
     }
 
     private ThemeScope theme;
@@ -151,10 +152,11 @@ public sealed partial class MainWindow : Window, IDisposable
             Plugin.Director.NotifyManualChange();
     }
 
-    private void MarkDirty() { dirty = true; editOccurred = true; }
+    private void MarkDirty() { dirty = true; editOccurred = true; InvalidateAssignmentCoverage(); }
 
     public override void Update()
     {
+        AdvanceAssignmentCheck(Plan);
         // Autosave a couple of seconds after the last edit so a crash never costs much.
         if (!dirty)
             return;
@@ -172,6 +174,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
     public override void OnClose()
     {
+        CancelAssignmentCheck();
         if (!dirty)
             return;
 
@@ -367,6 +370,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
     public void Dispose()
     {
+        Plugin.Encounter.CombatStarted -= CancelAssignmentCheck;
+        CancelAssignmentCheck();
         DisposeWtfDig();
         DisposeImport();
     }

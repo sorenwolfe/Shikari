@@ -105,6 +105,7 @@ public sealed partial class MainWindow
                 ImGui.BeginDisabled(rule.Branches.Count >= 16);
                 if (ImGui.Button("Add branch")) { rule.Branches.Add(new StatusBranch()); MarkDirty(); }
                 ImGui.EndDisabled();
+                DrawAssignmentCoverage(plan, rule);
                 var overlaps = plan.AdaptiveMechanics.Any(other => other != rule && other.Enabled && rule.Overlaps(other));
                 var valid = rule.IsValid(plan) && !overlaps;
                 if (!rule.IsValid(plan) && rule.Enabled) { rule.Enabled = false; MarkDirty(); }
@@ -112,7 +113,7 @@ public sealed partial class MainWindow
                 if (overlaps) ImGui.TextColored(Palette.Vec(Palette.Attention), "Another enabled rule covers this cast occurrence. Put alternatives in one mechanic.");
                 ImGui.BeginDisabled(!valid && !rule.Enabled);
                 var enabled = rule.Enabled;
-                if (ImGui.Checkbox("Enable this verified rule", ref enabled)) { rule.Enabled = enabled; MarkDirty(); }
+                if (ImGui.Checkbox("Enable live assignment guidance", ref enabled)) { rule.Enabled = enabled; MarkDirty(); }
                 ImGui.EndDisabled();
                 if (ImGui.SmallButton("Delete mechanic")) { plan.AdaptiveMechanics.RemoveAt(i--); MarkDirty(); }
             }
