@@ -51,6 +51,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File tests/buddy-layout.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/buddy-blink.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File tests/buddy-window.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File tests/wtfdig.ps1
@@ -211,6 +213,8 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -File tests/buddy-art.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/buddy-native-input.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File tests/symbols.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

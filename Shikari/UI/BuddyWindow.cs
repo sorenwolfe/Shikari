@@ -111,7 +111,8 @@ public sealed class BuddyWindow : Window, IDisposable
     public override void Draw()
     {
         var draw = ImGui.GetWindowDrawList();
-        if ((Flags & ImGuiWindowFlags.NoInputs) == 0) HandleDrag();
+        // NoInputs also contains NoNav, which this HUD always uses. Test only the mouse bit.
+        if ((Flags & ImGuiWindowFlags.NoMouseInputs) == 0) HandleDrag();
         var origin = ImGui.GetWindowPos();
         DrawPet(draw, origin + placement.SpriteMin);
         if (presentation.HasCue)
@@ -171,8 +172,13 @@ public sealed class BuddyWindow : Window, IDisposable
         var uv = BuddyMotion.Uvs(petFrame.Pose, placement.BubbleOnLeft);
         // The atlas carries real alpha. Draw only the creature, without a portrait background.
         if (TrySprite(out var handle))
+        {
             draw.AddImageQuad(handle, quad.A, quad.B, quad.C, quad.D, uv.Min, new Vector2(uv.Max.X, uv.Min.Y),
                 uv.Max, new Vector2(uv.Min.X, uv.Max.Y), 0xFFFFFFFF);
+            var blink = BuddyBlink.Sample(petFrame.Pose, ImGui.GetTime(), Plugin.Config.BuddyReducedMotion,
+                presentation.HasCue, presentation.Mood == BuddyMood.Recovering);
+            BuddyBlink.Draw(draw, quad, uv, blink);
+        }
         else
             DrawFallback(draw, min, size);
 
@@ -192,7 +198,7 @@ public sealed class BuddyWindow : Window, IDisposable
             }
         }
 
-        if ((Flags & ImGuiWindowFlags.NoInputs) == 0)
+        if ((Flags & ImGuiWindowFlags.NoMouseInputs) == 0)
         {
             var chrome = Palette.Pack(0xFFFFFF, .6f);
             var grip = min + new Vector2(size / 2, size + 9 * scale);

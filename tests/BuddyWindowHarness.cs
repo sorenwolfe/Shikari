@@ -44,7 +44,16 @@ namespace Dalamud.Interface.Textures
 }
 namespace Dalamud.Bindings.ImGui
 {
-    [Flags] public enum ImGuiWindowFlags { None = 0, NoDecoration = 1, NoMove = 2, NoSavedSettings = 4, NoBackground = 8, NoFocusOnAppearing = 16, NoNav = 32, NoScrollbar = 64, NoScrollWithMouse = 128, NoInputs = 256 }
+    // Match the real Dalamud/ImGui composite masks. Treating NoInputs as an independent
+    // bit hid a production bug: NoNav overlaps it even when mouse input is enabled.
+    [Flags] public enum ImGuiWindowFlags
+    {
+        None = 0, NoTitleBar = 1, NoResize = 2, NoMove = 4, NoScrollbar = 8,
+        NoScrollWithMouse = 16, NoCollapse = 32, NoBackground = 128, NoSavedSettings = 256,
+        NoMouseInputs = 512, NoFocusOnAppearing = 4096, NoNavInputs = 1 << 18, NoNavFocus = 1 << 19,
+        NoNav = NoNavInputs | NoNavFocus, NoInputs = NoMouseInputs | NoNav,
+        NoDecoration = NoTitleBar | NoResize | NoScrollbar | NoCollapse,
+    }
     public enum ImGuiCond { Always }
     public enum ImGuiStyleVar { WindowPadding }
     public enum ImGuiHoveredFlags { AllowWhenBlockedByActiveItem }
@@ -60,10 +69,23 @@ namespace Dalamud.Bindings.ImGui
         public readonly List<(Vector2 Min, Vector2 Max, Vector2 Uv)> Images = new();
         public readonly List<(Vector2 A, Vector2 B, Vector2 C, Vector2 D)> Quads = new();
         public readonly List<object> Commands = new();
+        public readonly List<Vector2[]> Polygons = new();
+        private readonly List<Vector2> path = new();
         public int RectFills;
         private static Color C(uint c) => Color.FromArgb((int)(c >> 24), (int)(c & 255), (int)((c >> 8) & 255), (int)((c >> 16) & 255));
         private static PointF P(Vector2 p) => new(p.X, p.Y);
-        public void Clear() { Texts.Clear(); Images.Clear(); Quads.Clear(); Commands.Clear(); RectFills = 0; }
+        public void Clear() { Texts.Clear(); Images.Clear(); Quads.Clear(); Commands.Clear(); Polygons.Clear(); path.Clear(); RectFills = 0; }
+        public void PathClear() => path.Clear();
+        public void PathLineTo(Vector2 point) => path.Add(point);
+        public void PathFillConvex(uint color)
+        {
+            var points = path.ToArray(); path.Clear();
+            if (points.Length < 3) return;
+            Polygons.Add(points);
+            Commands.Add(new { kind = "polygon", points = points.Select(p => new[] { p.X, p.Y }).ToArray(), color });
+            if (G == null) return;
+            using var brush = new SolidBrush(C(color)); G.FillPolygon(brush, points.Select(P).ToArray());
+        }
         private static GraphicsPath Rounded(Vector2 min, Vector2 max, float r)
         {
             var p = new GraphicsPath(); var d = Math.Min(r * 2, Math.Min(max.X - min.X, max.Y - min.Y));
@@ -235,6 +257,8 @@ namespace Shikari.Tests
             Frame(window); Check(ImGui.DrawList.Texts.Count == 0, "Idle creature must not generate a permanent instruction bubble");
             Check(ImGui.DrawList.RectFills == 0 && ImGui.DrawList.Images.Count == 1, "Idle HUD must draw the alpha sprite without any portrait fill or pod");
             Check(ImGui.DrawList.Images[0].Max.Y - ImGui.DrawList.Images[0].Min.Y > 117, "Existing saved scale should show the larger companion");
+            ImGui.Time = 4.875; Frame(window);
+            Check(ImGui.DrawList.Polygons.Count >= 4, "Idle blink must draw both eyelids over both eyes in the real window");
             Plugin.Config.BuddyReducedMotion = true;
             foreach (var state in Enum.GetValues<BuddyAmbientState>())
             {
@@ -248,13 +272,15 @@ namespace Shikari.Tests
             Check(ImGui.DrawList.Texts.All(t => t.Text == "z") && ImGui.DrawList.Texts.Count == 2, "Sleep adds only quiet Zs, not tactical instructions");
             Plugin.Buddy.Presentation = new("priority", "Your call", "Use your mitigation.", "", BuddyMood.Guiding, true); Frame(window);
             Check(ImGui.DrawList.Images.Single().Uv == BuddyMotion.Uvs(BuddyAmbientState.Focused, true).Min && ImGui.DrawList.Texts.All(t => t.Text != "z"), "Tactical cues suppress sleeping and welcome particles");
+            Check(ImGui.DrawList.Polygons.Count == 0, "Tactical focus must not inherit idle eyelids even during a blink time");
             Plugin.Buddy.Presentation = new("", "", "", "", BuddyMood.Resting, false); Plugin.Buddy.Ambient = new(BuddyAmbientState.Idle, DateTime.UtcNow);
             Plugin.Config.BuddyUnlocked = true; Plugin.Encounter.InCombat = true;
-            Frame(window); Check((window.Flags & ImGuiWindowFlags.NoInputs) != 0, "Combat must always override unlocked settings");
+            Frame(window); Check((window.Flags & ImGuiWindowFlags.NoMouseInputs) != 0, "Combat must always override unlocked settings");
             Plugin.Encounter.InCombat = false; Frame(window);
-            Check((window.Flags & ImGuiWindowFlags.NoInputs) == 0, "Unlocked buddy must be draggable outside combat");
+            Check((window.Flags & ImGuiWindowFlags.NoMouseInputs) == 0 && (window.Flags & ImGuiWindowFlags.NoNav) == ImGuiWindowFlags.NoNav,
+                "Unlocked buddy must accept mouse input while keyboard navigation stays disabled");
             Plugin.Condition.Active.Add(ConditionFlag.InCombat); Frame(window);
-            Check((window.Flags & ImGuiWindowFlags.NoInputs) != 0, "Native combat condition must lock input before encounter tracking catches up");
+            Check((window.Flags & ImGuiWindowFlags.NoMouseInputs) != 0, "Native combat condition must lock input before encounter tracking catches up");
             Plugin.Condition.Active.Clear(); Frame(window);
             var firstAnchor = Plugin.Config.BuddyAnchor;
             var image = ImGui.DrawList.Images.Single(); ImGui.Mouse = (image.Min + image.Max) / 2; ImGui.Hovered = true;
@@ -287,6 +313,8 @@ namespace Shikari.Tests
             Check(Plugin.TextureProvider.Loads == 1, "The shared texture reference must be cached per instance");
             Reset(); Plugin.TextureProvider.Fail = true; using var missing = new BuddyWindow(); Frame(missing); Frame(missing); Frame(missing);
             Check(Plugin.TextureProvider.Loads == 1 && Plugin.Log.Warnings == 1, "Missing artwork must fall back once without repeating warnings");
+            ImGui.Time = 4.875; Frame(missing);
+            Check(ImGui.DrawList.Polygons.Count == 0, "Missing texture fallback must not draw misplaced eyelids");
             missing.Dispose(); Frame(missing);
             Check(Plugin.TextureProvider.Loads == 1, "Disposed windows must not reload a released texture");
             Console.WriteLine("Buddy window: visibility, combat input, drag persistence, text bounds, cue fade and resource lifecycle passed.");
@@ -344,11 +372,11 @@ namespace Shikari.Tests
                 Reset(); ImGuiHelpers.MainViewport.Pos = Vector2.Zero; ImGuiHelpers.MainViewport.Size = new(1100, 620);
                 Plugin.Config.BuddyScale = 2; Plugin.Config.BuddyAnchor = new(.5f, .52f); Plugin.Config.BuddyReducedMotion = reduced;
                 using var window = new BuddyWindow(); var frames = new List<object>();
-                for (var i = 0; i < 240; i++)
+                for (var i = 0; i < 840; i++)
                 {
-                    var seconds = i / 20.0;
-                    var state = seconds < 3 ? BuddyAmbientState.Idle : seconds < 6 ? BuddyAmbientState.Sleeping : seconds < 8.5 ? BuddyAmbientState.Welcoming : BuddyAmbientState.Focused;
-                    var age = seconds - (state == BuddyAmbientState.Idle ? 0 : state == BuddyAmbientState.Sleeping ? 3 : state == BuddyAmbientState.Welcoming ? 6 : 8.5);
+                    var seconds = i / 40.0;
+                    var state = seconds < 12 ? BuddyAmbientState.Idle : seconds < 15 ? BuddyAmbientState.Sleeping : seconds < 17.5 ? BuddyAmbientState.Welcoming : BuddyAmbientState.Focused;
+                    var age = seconds - (state == BuddyAmbientState.Idle ? 0 : state == BuddyAmbientState.Sleeping ? 12 : state == BuddyAmbientState.Welcoming ? 15 : 17.5);
                     Plugin.Buddy.Ambient = new(state, DateTime.UtcNow.AddSeconds(-age)); ImGui.Time = seconds;
                     Frame(window); frames.Add(new { state = state.ToString(), commands = ImGui.DrawList.Commands.ToArray() });
                 }
@@ -357,8 +385,8 @@ namespace Shikari.Tests
             var template = """
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ember · Presence preview</title>
 <style>*{box-sizing:border-box}body{margin:0;background:#0d1119;color:#edf1f9;font:16px system-ui,sans-serif}main{max-width:1100px;margin:auto;padding:32px}h1{letter-spacing:.16em;font-size:24px;color:#fc536a}p{color:#a6b1c1;line-height:1.6}canvas{display:block;width:100%;border-radius:18px;background:radial-gradient(ellipse at 48% 58%,#2f475166,transparent 50%),linear-gradient(120deg,#162c39,#261725);border:1px solid #ffffff0d}nav{display:flex;gap:24px;align-items:center;margin:16px 0}button{border:1px solid #ffffff2b;color:#eef2fa;background:#252b37;padding:8px 16px;border-radius:8px;cursor:pointer}input{accent-color:#ee4560}#state{color:#f6cda6}small{color:#8796aa}</style>
-<main><h1>EMBER</h1><p>A companion with a little personality. The real window's drawing commands drive this preview.</p><canvas width="1100" height="620" aria-label="Animated Ember companion preview"></canvas><nav><button id="pause">Pause</button><label><input type="checkbox" id="reduced"> Reduce motion</label><strong id="state"></strong></nav><small>Idle → away → welcome back → focused. Demonstration timings only; the plugin uses detected AFK and duty state. This is a drawing API substitute, not an in-game capture.</small></main>
-<script>const variants=__FRAMES__,atlas=new Image();atlas.src='data:image/png;base64,__ATLAS__';const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d'),reduced=document.querySelector('#reduced'),state=document.querySelector('#state');let playing=true,clock=0,last=performance.now();const rgba=c=>`rgba(${c&255},${(c>>>8)&255},${(c>>>16)&255},${(c>>>24)/255})`;function paint(now){if(playing)clock+=(now-last)/1000;last=now;const f=variants[reduced.checked?1:0][Math.floor(clock*20)%240];ctx.clearRect(0,0,1100,620);state.textContent=f.state;for(const c of f.commands){ctx.save();if(c.kind==='image'){let a=c.a,b=c.b,d=c.d;if(c.uvA[0]>c.uvC[0]){d=[b[0]+d[0]-a[0],b[1]+d[1]-a[1]];[a,b]=[b,a]}ctx.transform(b[0]-a[0],b[1]-a[1],d[0]-a[0],d[1]-a[1],a[0],a[1]);ctx.drawImage(atlas,Math.min(c.uvA[0],c.uvC[0])*atlas.width,c.uvA[1]*atlas.height,Math.abs(c.uvC[0]-c.uvA[0])*atlas.width,(c.uvC[1]-c.uvA[1])*atlas.height,0,0,1,1)}else if(c.kind==='line'){ctx.strokeStyle=rgba(c.color);ctx.lineWidth=c.width;ctx.beginPath();ctx.moveTo(...c.a);ctx.lineTo(...c.b);ctx.stroke()}else if(c.kind==='text'){ctx.fillStyle=rgba(c.color);ctx.font=`${c.size*.75}px Segoe UI,sans-serif`;ctx.textBaseline='top';ctx.fillText(c.text,c.x,c.y)}ctx.restore()}requestAnimationFrame(paint)}atlas.onload=()=>requestAnimationFrame(paint);document.querySelector('#pause').onclick=e=>{playing=!playing;e.target.textContent=playing?'Pause':'Play'};</script></html>
+<main><h1>EMBER</h1><p>A companion with a little personality. The real window's drawing commands drive this preview.</p><canvas width="1100" height="620" aria-label="Animated Ember companion preview"></canvas><nav><button id="pause">Pause</button><button id="blink">Replay blink</button><label><input type="checkbox" id="reduced"> Reduce motion</label><strong id="state"></strong></nav><small>Idle → away → welcome back → focused. Demonstration timings only; the plugin uses detected AFK and duty state. This is a drawing API substitute, not an in-game capture.</small></main>
+<script>const variants=__FRAMES__,atlas=new Image();atlas.src='data:image/png;base64,__ATLAS__';const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d'),reduced=document.querySelector('#reduced'),state=document.querySelector('#state');let playing=true,clock=0,last=performance.now();const rgba=c=>`rgba(${c&255},${(c>>>8)&255},${(c>>>16)&255},${(c>>>24)/255})`;function paint(now){if(playing)clock+=(now-last)/1000;last=now;const f=variants[reduced.checked?1:0][Math.floor(clock*40)%840];ctx.clearRect(0,0,1100,620);state.textContent=f.state;for(const c of f.commands){ctx.save();if(c.kind==='image'){let a=c.a,b=c.b,d=c.d;if(c.uvA[0]>c.uvC[0]){d=[b[0]+d[0]-a[0],b[1]+d[1]-a[1]];[a,b]=[b,a]}ctx.transform(b[0]-a[0],b[1]-a[1],d[0]-a[0],d[1]-a[1],a[0],a[1]);ctx.drawImage(atlas,Math.min(c.uvA[0],c.uvC[0])*atlas.width,c.uvA[1]*atlas.height,Math.abs(c.uvC[0]-c.uvA[0])*atlas.width,(c.uvC[1]-c.uvA[1])*atlas.height,0,0,1,1)}else if(c.kind==='polygon'){ctx.fillStyle=rgba(c.color);ctx.beginPath();ctx.moveTo(...c.points[0]);for(let i=1;i<c.points.length;i++)ctx.lineTo(...c.points[i]);ctx.closePath();ctx.fill()}else if(c.kind==='line'){ctx.strokeStyle=rgba(c.color);ctx.lineWidth=c.width;ctx.beginPath();ctx.moveTo(...c.a);ctx.lineTo(...c.b);ctx.stroke()}else if(c.kind==='text'){ctx.fillStyle=rgba(c.color);ctx.font=`${c.size*.75}px Segoe UI,sans-serif`;ctx.textBaseline='top';ctx.fillText(c.text,c.x,c.y)}ctx.restore()}requestAnimationFrame(paint)}atlas.onload=()=>requestAnimationFrame(paint);document.querySelector('#pause').onclick=e=>{playing=!playing;e.target.textContent=playing?'Pause':'Play'};document.querySelector('#blink').onclick=()=>{clock=4.7;playing=true;last=performance.now();document.querySelector('#pause').textContent='Pause'};</script></html>
 """;
             File.WriteAllText(output, template.Replace("__FRAMES__", JsonSerializer.Serialize(variants)).Replace("__ATLAS__", Convert.ToBase64String(File.ReadAllBytes(spritePath))));
         }
