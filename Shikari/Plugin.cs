@@ -12,6 +12,7 @@ using Shikari.Services.Speech;
 using Shikari.Services.RaidPlanIo;
 using Shikari.Services.Replay;
 using Shikari.Services.Adaptive;
+using Shikari.Services.Buddy;
 using Shikari.UI;
 using Shikari.UI.World;
 using Shikari.UI.Theme;
@@ -56,6 +57,7 @@ public sealed class Plugin : IDalamudPlugin
     internal static ThemeFonts Fonts { get; private set; } = null!;
     internal static ReplayStore Replays { get; private set; } = null!;
     internal static AdaptiveService Adaptive { get; private set; } = null!;
+    internal static BuddyService Buddy { get; private set; } = null!;
 
     public readonly WindowSystem WindowSystem = new("Shikari");
 
@@ -74,6 +76,7 @@ public sealed class Plugin : IDalamudPlugin
     private ConfigWindow configWindow = null!;
     private OverlayWindow overlayWindow = null!;
     private MiniPlanWindow miniWindow = null!;
+    private BuddyWindow buddyWindow = null!;
 
     public Plugin()
     {
@@ -134,6 +137,9 @@ public sealed class Plugin : IDalamudPlugin
         Director.SlideRequested += mainWindow.OnDirectedSlide;
         Director.ResetRequested += mainWindow.OnDirectedReset;
         Replays = new ReplayStore();
+        Buddy = new BuddyService();
+        buddyWindow = new BuddyWindow { IsOpen = true };
+        WindowSystem.AddWindow(buddyWindow);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -291,6 +297,7 @@ public sealed class Plugin : IDalamudPlugin
         Safely(() => Director.SlideRequested -= mainWindow.OnDirectedSlide, "detach the slide director");
         Safely(() => Director.ResetRequested -= mainWindow.OnDirectedReset, "detach the slide reset");
 
+        Safely(() => Buddy?.Dispose(), "stop the raid buddy");
         Safely(Director.Dispose, "shut down the slide director");
         Safely(() => Replays?.Dispose(), "finish mechanic recording");
         Safely(() => Adaptive?.Dispose(), "stop adaptive mechanics");
@@ -313,6 +320,7 @@ public sealed class Plugin : IDalamudPlugin
         Safely(configWindow.Dispose, "dispose the settings window");
         Safely(overlayWindow.Dispose, "dispose the overlay");
         Safely(miniWindow.Dispose, "dispose the mini plan");
+        Safely(() => buddyWindow?.Dispose(), "dispose the raid buddy window");
 
         // Saving comes last. A disk error here used to abandon the rest of the teardown.
         Safely(Plans.SaveAll, "save the plans");

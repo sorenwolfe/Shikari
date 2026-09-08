@@ -12,7 +12,7 @@ using Shikari.UI.World;
 namespace Shikari.UI;
 
 /// <summary>Team profiles and delivery settings.</summary>
-public sealed class ConfigWindow : Window, IDisposable
+public sealed partial class ConfigWindow : Window, IDisposable
 {
     /// <summary>Set from anywhere to have the window open on the next frame.</summary>
     public static bool RequestOpen;
@@ -383,6 +383,7 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGui.Spacing();
+        DrawBuddySettings(config);
         ImGui.TextDisabled("Mini plan");
         ImGui.Separator();
 

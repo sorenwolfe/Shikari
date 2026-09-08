@@ -13,12 +13,16 @@ namespace Shikari.Services;
 /// <summary>A call that is currently on screen.</summary>
 public sealed class ActiveCall
 {
+    public PlanDocument? SourcePlan { get; init; }
+    public string PlanId { get; init; } = string.Empty;
     public string EntryId { get; init; } = string.Empty;
     public string Headline { get; init; } = string.Empty;
     public string SubLine { get; init; } = string.Empty;
     public bool ForLocalPlayer { get; init; }
     public DateTime ExpiresAtUtc { get; set; }
     public DateTime FiredAtUtc { get; init; }
+    /// <summary>Intended delivery time; consumers can reject overdue calls after a pause.</summary>
+    public DateTime ScheduledAtUtc { get; init; }
     public uint AccentColor { get; init; }
 }
 
@@ -30,6 +34,8 @@ public sealed class ReminderEngine : IDisposable
 {
     private sealed class PendingCall
     {
+        public required PlanDocument Plan;
+        public required string PlanId;
         public required TimelineEntry Entry;
         public DateTime FireAtUtc;
         public int Occurrence;
@@ -52,6 +58,9 @@ public sealed class ReminderEngine : IDisposable
 
     /// <summary>Raised when a step delivers its call. Test calls raise it too.</summary>
     public event Action<TimelineEntry>? StepFired;
+
+    /// <summary>A newly formatted delivery, including when the ordinary overlay is disabled.</summary>
+    public event Action<ActiveCall>? CallDelivered;
 
     public void ClearActive() => active.Clear();
 
@@ -104,7 +113,7 @@ public sealed class ReminderEngine : IDisposable
                 if (elapsed >= entry.TimeSeconds - entry.LeadSeconds - lead)
                 {
                     fired.Add(key);
-                    Fire(plan, entry);
+                    Fire(plan, entry, scheduledAtUtc: now.AddSeconds(Math.Max(0, entry.TimeSeconds - entry.LeadSeconds - lead) - elapsed));
                 }
             }
 
@@ -133,7 +142,7 @@ public sealed class ReminderEngine : IDisposable
                 if (TimelinePrediction.IsDue(elapsed, expected, entry.LeadSeconds + lead))
                 {
                     fired.Add(key);
-                    Fire(plan, entry);
+                    Fire(plan, entry, scheduledAtUtc: now.AddSeconds(Math.Max(0, expected - entry.LeadSeconds - lead) - elapsed));
                 }
             }
 
@@ -146,12 +155,15 @@ public sealed class ReminderEngine : IDisposable
                 var call = pending[i];
                 pending.RemoveAt(i);
 
+                if (!ReferenceEquals(call.Plan, plan) || call.PlanId != plan.Id || !plan.Timeline.Contains(call.Entry))
+                    continue;
+
                 var key = Key(call.Entry, call.Occurrence);
                 if (fired.Contains(key))
                     continue;
 
                 fired.Add(key);
-                Fire(plan, call.Entry);
+                Fire(call.Plan, call.Entry, scheduledAtUtc: call.FireAtUtc);
             }
         }
         catch (Exception ex)
@@ -204,6 +216,8 @@ public sealed class ReminderEngine : IDisposable
 
             pending.Add(new PendingCall
             {
+                Plan = plan,
+                PlanId = plan.Id,
                 Entry = entry,
                 Occurrence = evt.Occurrence,
                 FireAtUtc = evt.StartedAtUtc.AddSeconds(delay),
@@ -233,7 +247,7 @@ public sealed class ReminderEngine : IDisposable
     /// <summary>Delivers a step's call now, ignoring triggers. Used by the Test button.</summary>
     public void FireNow(PlanDocument plan, TimelineEntry entry) => Fire(plan, entry, test: true);
 
-    private void Fire(PlanDocument plan, TimelineEntry entry, bool test = false)
+    private void Fire(PlanDocument plan, TimelineEntry entry, bool test = false, DateTime? scheduledAtUtc = null)
     {
         var team = Plugin.Config.GetActiveTeam();
         var slot = Plugin.Roster.ResolveLocalSlot(plan);
@@ -259,18 +273,23 @@ public sealed class ReminderEngine : IDisposable
 
         var now = DateTime.UtcNow;
 
+        var delivery = new ActiveCall
+        {
+            SourcePlan = plan,
+            PlanId = plan.Id,
+            EntryId = entry.Id,
+            Headline = headline,
+            SubLine = subline,
+            ForLocalPlayer = addressesMe,
+            FiredAtUtc = now,
+            ScheduledAtUtc = scheduledAtUtc ?? now,
+            ExpiresAtUtc = now.AddSeconds(Math.Max(0.5f, team.OverlayHoldSeconds)),
+            AccentColor = accent,
+        };
+
         if ((team.Channels & ReminderChannel.Overlay) != 0)
         {
-            active.Insert(0, new ActiveCall
-            {
-                EntryId = entry.Id,
-                Headline = headline,
-                SubLine = subline,
-                ForLocalPlayer = addressesMe,
-                FiredAtUtc = now,
-                ExpiresAtUtc = now.AddSeconds(Math.Max(0.5f, team.OverlayHoldSeconds)),
-                AccentColor = accent,
-            });
+            active.Insert(0, delivery);
 
             while (active.Count > 4)
                 active.RemoveAt(active.Count - 1);
@@ -304,6 +323,7 @@ public sealed class ReminderEngine : IDisposable
         }
 
         StepFired?.Invoke(entry);
+        CallDelivered?.Invoke(delivery);
     }
 
     private static string BuildSubLine(PlanDocument plan, TimelineEntry entry, int slot)

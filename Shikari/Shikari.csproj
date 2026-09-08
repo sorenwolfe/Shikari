@@ -13,6 +13,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources\shadow.png" LogicalName="Shikari.Resources.shadow.png" />
     <EmbeddedResource Include="Resources\glow.png" LogicalName="Shikari.Resources.glow.png" />
+    <EmbeddedResource Include="Resources\buddy-dragon.png" LogicalName="Shikari.Resources.buddy-dragon.png" />
   </ItemGroup>
 
 </Project>

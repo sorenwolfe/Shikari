@@ -97,6 +97,13 @@ public sealed class TeamProfile
 
 public sealed class Configuration : IPluginConfiguration
 {
+    /// <summary>Optional personal-cue dragon. Existing installations remain opted out.</summary>
+    public bool BuddyEnabled { get; set; }
+    public Vector2 BuddyAnchor { get; set; } = new(.76f, .70f);
+    public float BuddyScale { get; set; } = 1f;
+    public bool BuddyReducedMotion { get; set; }
+    public bool BuddyUnlocked { get; set; }
+
     public bool ReplayEnabled { get; set; } = true;
     public int ReplayRetention { get; set; } = 10;
 

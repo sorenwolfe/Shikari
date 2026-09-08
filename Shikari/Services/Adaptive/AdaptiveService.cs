@@ -22,6 +22,8 @@ public sealed class AdaptiveService : IDisposable
     public string Status { get; private set; } = "Adaptive mechanics ready. Rules are captured at pull start.";
     public event Action<StatusObservation>? Observed;
     public event Action<AdaptiveDecision>? Decided;
+    /// <summary>Consumers must discard actionable guidance across unreadable actor/status data.</summary>
+    public event Action? EvidenceInvalidated;
 
     public AdaptiveService()
     {
@@ -71,10 +73,20 @@ public sealed class AdaptiveService : IDisposable
         try
         {
             var player = Plugin.ObjectTable.LocalPlayer;
-            if (player == null || player.IsDead) { tracker.Invalidate(); engine.InvalidateEvidence(); actorId = 0; }
+            if (player == null || player.IsDead)
+            {
+                tracker.Invalidate(); engine.InvalidateEvidence();
+                if (actorId != 0) EvidenceInvalidated?.Invoke();
+                actorId = 0;
+            }
             else
             {
-                if (actorId != player.EntityId) { tracker.Invalidate(); engine.InvalidateEvidence(); actorId = player.EntityId; }
+                if (actorId != player.EntityId)
+                {
+                    tracker.Invalidate(); engine.InvalidateEvidence();
+                    if (actorId != 0) EvidenceInvalidated?.Invoke();
+                    actorId = player.EntityId;
+                }
                 var samples = player.StatusList.Select(s => new StatusSample(s.StatusId, s.RemainingTime, s.Param, s.SourceId)).ToArray();
                 observations = tracker.Observe(samples, time);
             }
@@ -83,6 +95,7 @@ public sealed class AdaptiveService : IDisposable
         {
             tracker.Invalidate();
             engine.InvalidateEvidence();
+            EvidenceInvalidated?.Invoke();
             Status = "Status data unavailable; waiting for a fresh observation.";
         }
         foreach (var observation in observations)

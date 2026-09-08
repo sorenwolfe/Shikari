@@ -83,6 +83,16 @@ Enable **Your view** under the mini board to hide other players' tokens and labe
 
 ## Calls and changing mechanics
 
+### Ember, your raid buddy
+
+Check **Enable dragon buddy** in `/shikari config` to meet Ember. He stays quiet between mechanics and shows one short speech bubble for a personal timeline call or a detected Adaptive assignment. While a supported assignment is being determined, he can remind you to watch for your status effect. Unclear assignments stay unclear.
+
+The buddy is off by default and appears while a plan is active, independently of the mini window. Expand **Appearance and placement** to resize him, reduce motion, or unlock his position. Drag him outside combat, then lock him again; during pulls he always lets clicks pass through. Disabling the checkbox hides him immediately.
+
+Ember uses your enabled timeline and Adaptive rules. Importing a guide alone doesn't teach him how to solve every mechanic. Assignment bubbles point to the selected board and respect your follow settings and manual navigation. Personal call bubbles follow the Calls switch; their delivery does not require the on-screen banner channel. If you enable him during a pull, he'll pick up new calls immediately and start watching for adaptive assignments on the next pull.
+
+### Reminders and adaptive assignments
+
 Choose how you receive reminders in **Settings**: on-screen calls, chat, notifications, sound, or speech. `/shikari calls` toggles reminders as a whole; voice has its own setting.
 
 For mechanics where your assignment changes with a buff or debuff, use **Plan → Adaptive** to set up the conditions and corresponding slides. Check each rule before enabling it. Imported rules start disabled, and importing a guide doesn't automatically create these assignments.
