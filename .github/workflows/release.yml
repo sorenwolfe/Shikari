@@ -8,7 +8,14 @@ permissions:
   contents: write
 
 jobs:
+  # Verify the tagged source itself before the release or aggregator can run.
+  verify:
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+
   release:
+    needs: verify
     runs-on: windows-latest
 
     # A step `if:` cannot read the secrets context; going through env can.

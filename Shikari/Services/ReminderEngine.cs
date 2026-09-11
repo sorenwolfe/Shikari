@@ -42,7 +42,7 @@ public sealed class ReminderEngine : IDisposable
     }
 
     private readonly List<PendingCall> pending = new();
-    private readonly HashSet<string> fired = new();
+    private readonly HashSet<(string EntryId, int Occurrence)> fired = new();
     private readonly List<ActiveCall> active = new();
 
     public ReminderEngine()
@@ -91,7 +91,9 @@ public sealed class ReminderEngine : IDisposable
                     active.RemoveAt(i);
             }
 
-            if (!ShouldRun())
+            // Keep speech warm-up in ShouldRun before the combat gate: the engine drops
+            // calls while starting. The idle pull clock must not schedule opening calls.
+            if (!ShouldRun() || !Plugin.Encounter.InCombat)
                 return;
 
             var plan = Plugin.Plans.Active;
@@ -155,7 +157,7 @@ public sealed class ReminderEngine : IDisposable
                 var call = pending[i];
                 pending.RemoveAt(i);
 
-                if (!ReferenceEquals(call.Plan, plan) || call.PlanId != plan.Id || !plan.Timeline.Contains(call.Entry))
+                if (!ReferenceEquals(call.Plan, plan) || call.PlanId != plan.Id || !call.Entry.Enabled || !plan.Timeline.Contains(call.Entry))
                     continue;
 
                 var key = Key(call.Entry, call.Occurrence);
@@ -358,7 +360,7 @@ public sealed class ReminderEngine : IDisposable
         }
     }
 
-    private static string Key(TimelineEntry entry, int occurrence) => entry.Id + "#" + occurrence;
+    private static (string EntryId, int Occurrence) Key(TimelineEntry entry, int occurrence) => (entry.Id, occurrence);
 
     public void Dispose()
     {

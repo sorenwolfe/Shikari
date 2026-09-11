@@ -24,7 +24,15 @@ public sealed class EvidenceTimeline
             if (e.Time > time) break;
             if (e.Change == "unavailable") { active.Clear(); continue; }
             var key = (e.StatusId, e.AbilityId, e.SourceId);
-            if (e.Change == "remove") active.Remove(key);
+            if (e.Change == "remove")
+            {
+                // FF Logs can omit the source or report -1. A full removal then cannot
+                // leave any possible source of this status eligible as active evidence.
+                if (e.SourceId <= 0)
+                    foreach (var candidate in active.Keys.Where(k => k.Item1 == e.StatusId && k.Item2 == e.AbilityId).ToArray())
+                        active.Remove(candidate);
+                else active.Remove(key);
+            }
             else if (e.Change == "stacks" && active.TryGetValue(key, out var prior))
                 active[key] = new EvidenceStatus { ActorId = prior.ActorId, SourceId = prior.SourceId,
                     StatusId = prior.StatusId, AbilityId = prior.AbilityId, Name = prior.Name,

@@ -16,6 +16,7 @@ private static readonly LogFight Fight = new() { Id=30, StartTime=10000, EndTime
 private static string Page(string rows, string next="null") => "{\"data\":{\"reportData\":{\"report\":{\"events\":{\"data\":" + rows + ",\"nextPageTimestamp\":" + next + "}}}}}";
 private sealed class Responses : HttpMessageHandler {
     private readonly Queue<string> pages;
+    public List<string> Queries { get; } = new();
     public bool RequireEvidenceQuery { get; init; } = true;
     public bool RequireEncounterIdentity { get; init; }
     public Responses(params string[] pages) => this.pages = new(pages);
@@ -25,6 +26,7 @@ private sealed class Responses : HttpMessageHandler {
         if (request.RequestUri!.AbsolutePath.EndsWith("/token")) body="{\"access_token\":\"fixture\",\"expires_in\":3600}";
         else {
             var query = JObject.Parse(await request.Content!.ReadAsStringAsync(cancel)).Value<string>("query")!;
+            Queries.Add(query);
             if (RequireEvidenceQuery) Check(query.Contains("includeResources: true") && query.Contains("dataType: All"), "Evidence request must include resources and all event types");
             if (RequireEncounterIdentity) Check(query.Contains("encounterID"), "Fight query must request source encounter identity");
             body=pages.Dequeue();
@@ -56,6 +58,7 @@ public static async Task Run() {
         Check((bool)castStart.GetValue(data.EnemyCasts[1])! && data.EnemyCasts[1].CastSeconds==2, "Paired completed cast retains its observed start");
         Check(!(bool)castStart.GetValue(data.EnemyCasts[2])!, "Instant action must not become a cast-bar occurrence");
     }
+    await CastPagination();
     var parser=new LogEvidenceParser(Fight, new Dictionary<uint,string>{{1000048,"Well Fed"}});
     parser.AddPage(JArray.Parse("""
     [
@@ -130,5 +133,37 @@ public static async Task Run() {
         catch(OperationCanceledException) { checks++; }
     }
     Console.WriteLine($"PASS: {checks} FF Logs evidence checks");
+}
+private static async Task CastPagination() {
+    const string master="{\"data\":{\"reportData\":{\"report\":{\"masterData\":{\"actors\":[],\"abilities\":[]}}}}}";
+    var missingCursor=Page("[]").Replace(",\"nextPageTimestamp\":null", "");
+    foreach(var fixture in new[] {
+        ("unreadable cast page", new[] { "{\"data\":{\"reportData\":{\"report\":null}}}" }),
+        ("missing cast cursor", new[] { missingCursor }),
+        ("nonadvancing cast cursor", new[] { Page("[]", "10000") }),
+        ("out-of-range cast cursor", new[] { Page("[]", "20001") }),
+        ("nonnumeric cast cursor", new[] { Page("[]", "\"12000\"") }),
+        ("cast page budget", Enumerable.Range(0,20).Select(i=>Page("[]",(11000+i).ToString())).ToArray()),
+        ("cast event budget", new[] { Page("["+string.Join(",",Enumerable.Repeat("{\"timestamp\":11000,\"type\":\"damage\"}",200001))+"]") }),
+    }) {
+        using var client=new FfLogsClient(new Responses(new[] { master }.Concat(fixture.Item2).Concat(new[] { Page("[]"), Page("[]") }).ToArray()) { RequireEvidenceQuery=false });
+        var rejected=false;
+        try { await client.GetFightDataAsync("id","secret","code",Fight); }
+        catch(FfLogsException) { rejected=true; }
+        Check(rejected, fixture.Item1+" must reject the import instead of returning apparently complete cast occurrences");
+    }
+    var pages=new Responses(master,
+        Page("[{\"timestamp\":11000,\"type\":\"begincast\",\"sourceID\":1,\"abilityGameID\":100}]", "12000.5"),
+        Page("[{\"timestamp\":14000,\"type\":\"cast\",\"sourceID\":1,\"abilityGameID\":100}]"), Page("[]")) { RequireEvidenceQuery=false };
+    using(var client=new FfLogsClient(pages)) {
+        var data=await client.GetFightDataAsync("id","secret","code",Fight);
+        Check(data.EnemyCasts.Single().CastSeconds==3, "Cast pairing survives pagination");
+        Check(pages.Queries.Any(q=>q.Contains("startTime: 12000.5")), "Cast pagination preserves fractional millisecond cursors without rounding");
+    }
+    using(var client=new FfLogsClient(new Responses(new[] { master }.Concat(Enumerable.Range(0,19).Select(i=>Page("[]",(11000+i).ToString())))
+        .Concat(new[] { Page("[]"), Page("[]") }).ToArray()) { RequireEvidenceQuery=false })) {
+        Check((await client.GetFightDataAsync("id","secret","code",Fight)).EnemyCasts.Count==0,
+            "A completed twentieth cast page remains a valid empty history");
+    }
 }
 }}

@@ -1,7 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
 using Shikari.Model;
+using Shikari.Services;
 using Shikari.Services.Replay;
 
 namespace Dalamud.Plugin.Services { public interface IFramework { } }
@@ -163,6 +168,193 @@ namespace Shikari.Tests
             Check(System.IO.Directory.GetFiles(System.IO.Path.Combine(directory, "replays"), "*.json").Length == 0, "Clear persists");
             Console.WriteLine("PASS: recording lifecycle, duplicate end, cast anchoring, persistence, reload, zone change, clear");
             Console.WriteLine("PASS: automatic completed-pull evidence, action-name inference, persistence, changed-plan rejection, save rollback and zone/unload skips");
+            RunStorage(Path.Combine(directory, "storage"));
+        }
+
+        private static void WaitForStorage(ReplayStore store, string field)
+        {
+            var task = (Task)typeof(ReplayStore).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
+            Check(task.Wait(TimeSpan.FromSeconds(10)), "Replay storage did not settle");
+        }
+
+        private static ReplayAttempt StoredAttempt(DateTime started) => new()
+            { Plan = PlanDocument.CreateDefault(), StartedUtc = started, Duration = 1 };
+
+        private static string ReplayPath(string directory, ReplayAttempt attempt) =>
+            Path.Combine(directory, "replays", attempt.Id + ".json");
+
+        private static void RunStorage(string directory)
+        {
+            var failures = new List<Exception>();
+            void RunCase(Action test) { try { test(); } catch (Exception ex) { failures.Add(ex); } }
+            RunCase(() => FailedSavePreservesDurableReplay(Path.Combine(directory, "failed-save")));
+            RunCase(() => InvalidNewestPreservesValidReplay(Path.Combine(directory, "corrupt-load"), false));
+            RunCase(() => InvalidNewestPreservesValidReplay(Path.Combine(directory, "future-load"), true));
+            RunCase(() => ExplicitDeletionStaysOrdered(Path.Combine(directory, "ordered")));
+            RunCase(() => ReducedRetentionTrimsDurableFiles(Path.Combine(directory, "reduced")));
+            RunCase(() => DeletedLoadingReplayStaysDeleted(Path.Combine(directory, "delete-during-load")));
+            RunCase(() => EvidenceEditsPreserveRetentionOrder(Path.Combine(directory, "edit-order")));
+            RunCase(() => ReloadedEvidenceEditsPreserveRetentionOrder(Path.Combine(directory, "reload-edit-order")));
+            RunCase(() => ImportsDuringLoadPreserveRetentionOrder(Path.Combine(directory, "import-during-load")));
+            Plugin.Config.ReplayRetention = 10;
+            if (failures.Count > 0) throw new AggregateException(failures);
+            Console.WriteLine("PASS: failed replay saves preserve durable retention, retry cleans up, invalid/unsupported startup files preserve usable evidence, explicit deletion remains ordered");
+        }
+
+        private static void FailedSavePreservesDurableReplay(string directory)
+        {
+            Plugin.PluginInterface.Directory = directory;
+            Plugin.Config.ReplayRetention = 1;
+            var older = StoredAttempt(DateTime.UtcNow.AddHours(-1));
+            var newer = StoredAttempt(DateTime.UtcNow);
+            using var store = new ReplayStore();
+            WaitForStorage(store, "loading"); Plugin.Framework.Tick();
+            store.AddImported(older); WaitForStorage(store, "writes");
+            Check(File.Exists(ReplayPath(directory, older)), "Baseline replay was not saved");
+            // Force the real atomic replacement to fail while old replay deletion is allowed.
+            Directory.CreateDirectory(ReplayPath(directory, newer));
+            store.AddImported(newer); WaitForStorage(store, "writes");
+            Check(!string.IsNullOrEmpty(store.Status), "A failed replay save must report its storage error");
+            Check(File.Exists(ReplayPath(directory, older)), "Failed replacement must preserve the last durable replay");
+            Check(!File.Exists(ReplayPath(directory, newer)), "The replacement should still be unsaved");
+            Directory.Delete(ReplayPath(directory, newer));
+            store.SaveEvidence(newer); WaitForStorage(store, "writes");
+            Check(File.Exists(ReplayPath(directory, newer)), "Retry must persist the replacement replay");
+            Check(!File.Exists(ReplayPath(directory, older)), "Successful retry must enforce retention on the older fallback");
+        }
+
+        private static void InvalidNewestPreservesValidReplay(string directory, bool futureVersion)
+        {
+            Directory.CreateDirectory(Path.Combine(directory, "replays"));
+            Plugin.PluginInterface.Directory = directory;
+            Plugin.Config.ReplayRetention = 1;
+            var older = StoredAttempt(DateTime.UtcNow.AddHours(-1));
+            var newer = StoredAttempt(DateTime.UtcNow);
+            var excess = StoredAttempt(DateTime.UtcNow.AddHours(-2));
+            var futureOlder = StoredAttempt(DateTime.UtcNow.AddHours(-3));
+            futureOlder.Version = 99;
+            File.WriteAllText(ReplayPath(directory, excess), JsonConvert.SerializeObject(excess, PlanJson.Compact()));
+            File.SetLastWriteTimeUtc(ReplayPath(directory, excess), DateTime.UtcNow.AddHours(-2));
+            File.WriteAllText(ReplayPath(directory, futureOlder), JsonConvert.SerializeObject(futureOlder, PlanJson.Compact()));
+            File.SetLastWriteTimeUtc(ReplayPath(directory, futureOlder), DateTime.UtcNow.AddHours(-3));
+            File.WriteAllText(ReplayPath(directory, older), JsonConvert.SerializeObject(older, PlanJson.Compact()));
+            File.SetLastWriteTimeUtc(ReplayPath(directory, older), DateTime.UtcNow.AddHours(-1));
+            newer.Version = 99;
+            File.WriteAllText(ReplayPath(directory, newer), futureVersion
+                ? JsonConvert.SerializeObject(newer, PlanJson.Compact()) : "{ damaged-json");
+            using var store = new ReplayStore();
+            WaitForStorage(store, "loading"); Plugin.Framework.Tick();
+            Check(File.Exists(ReplayPath(directory, older)), "Invalid or unsupported newest replay must not erase an older usable replay");
+            Check(store.Attempts.Count == 1 && store.Attempts[0].Id == older.Id, "Retention must count successfully loaded replays");
+            Check(File.Exists(ReplayPath(directory, newer)), "Rejected newest replay must remain available for recovery or a newer reader");
+            Check(!File.Exists(ReplayPath(directory, excess)), "Startup must still trim excess validated replay files");
+            Check(File.Exists(ReplayPath(directory, futureOlder)), "Unsupported older replay files must also remain available for a newer reader");
+        }
+
+        private static void ExplicitDeletionStaysOrdered(string directory)
+        {
+            Plugin.PluginInterface.Directory = directory;
+            Plugin.Config.ReplayRetention = 1;
+            using var store = new ReplayStore();
+            WaitForStorage(store, "loading"); Plugin.Framework.Tick();
+            var removed = StoredAttempt(DateTime.UtcNow.AddMinutes(-1));
+            var retained = StoredAttempt(DateTime.UtcNow);
+            store.AddImported(removed);
+            store.Delete(removed.Id);
+            WaitForStorage(store, "writes");
+            Check(!File.Exists(ReplayPath(directory, removed)), "Explicit delete must remove even the only durable replay after its pending write");
+            store.AddImported(removed);
+            store.Clear();
+            store.AddImported(retained);
+            WaitForStorage(store, "writes");
+            Check(!File.Exists(ReplayPath(directory, removed)) && File.Exists(ReplayPath(directory, retained)),
+                "Clear must run after earlier writes and before later writes");
+            Check(store.Attempts.Count == 1 && store.Attempts[0].Id == retained.Id, "Clear must preserve only later in-memory imports");
+        }
+
+        private static void ReducedRetentionTrimsDurableFiles(string directory)
+        {
+            Plugin.PluginInterface.Directory = directory;
+            Plugin.Config.ReplayRetention = 3;
+            using var store = new ReplayStore();
+            WaitForStorage(store, "loading"); Plugin.Framework.Tick();
+            var first = StoredAttempt(DateTime.UtcNow.AddMinutes(-2));
+            var second = StoredAttempt(DateTime.UtcNow.AddMinutes(-1));
+            var newest = StoredAttempt(DateTime.UtcNow);
+            store.AddImported(first); store.AddImported(second); store.AddImported(newest);
+            WaitForStorage(store, "writes");
+            Check(Directory.GetFiles(Path.Combine(directory, "replays"), "*.json").Length == 3, "Initial retention must keep all three durable replays");
+            Plugin.Config.ReplayRetention = 1;
+            Plugin.Framework.Tick(); WaitForStorage(store, "writes");
+            Check(store.Attempts.Count == 1 && store.Attempts[0].Id == newest.Id &&
+                File.Exists(ReplayPath(directory, newest)) && !File.Exists(ReplayPath(directory, first)) && !File.Exists(ReplayPath(directory, second)),
+                "Lower retention must trim both memory and durable storage without waiting for another pull");
+        }
+
+        private static void DeletedLoadingReplayStaysDeleted(string directory)
+        {
+            Directory.CreateDirectory(Path.Combine(directory, "replays"));
+            Plugin.PluginInterface.Directory = directory;
+            Plugin.Config.ReplayRetention = 1;
+            var attempt = StoredAttempt(DateTime.UtcNow);
+            File.WriteAllText(ReplayPath(directory, attempt), JsonConvert.SerializeObject(attempt, PlanJson.Compact()));
+            using var store = new ReplayStore();
+            store.Delete(attempt.Id);
+            WaitForStorage(store, "loading"); Plugin.Framework.Tick(); WaitForStorage(store, "writes");
+            Check(store.Attempts.Count == 0 && !File.Exists(ReplayPath(directory, attempt)),
+                "An explicit deletion before load results merge must not resurrect the replay in memory");
+        }
+
+        private static void EvidenceEditsPreserveRetentionOrder(string directory)
+        {
+            Plugin.PluginInterface.Directory = directory;
+            Plugin.Config.ReplayRetention = 2;
+            using var store = new ReplayStore();
+            WaitForStorage(store, "loading"); Plugin.Framework.Tick();
+            var oldest = StoredAttempt(DateTime.UtcNow.AddMinutes(-2));
+            var recent = StoredAttempt(DateTime.UtcNow.AddMinutes(-1));
+            var newest = StoredAttempt(DateTime.UtcNow);
+            store.AddImported(oldest); store.AddImported(recent);
+            store.SaveEvidence(oldest);
+            store.AddImported(newest); WaitForStorage(store, "writes");
+            Check(store.Attempts.Count == 2 && store.Attempts[0].Id == newest.Id && store.Attempts[1].Id == recent.Id &&
+                !File.Exists(ReplayPath(directory, oldest)) && File.Exists(ReplayPath(directory, recent)) && File.Exists(ReplayPath(directory, newest)),
+                "Editing old evidence must not make disk retention evict a different replay than memory retention");
+        }
+
+        private static void ReloadedEvidenceEditsPreserveRetentionOrder(string directory)
+        {
+            Directory.CreateDirectory(Path.Combine(directory, "replays"));
+            Plugin.PluginInterface.Directory = directory;
+            Plugin.Config.ReplayRetention = 2;
+            var oldest = StoredAttempt(DateTime.UtcNow.AddMinutes(-2));
+            var recent = StoredAttempt(DateTime.UtcNow.AddMinutes(-1));
+            var newest = StoredAttempt(DateTime.UtcNow);
+            File.WriteAllText(ReplayPath(directory, recent), JsonConvert.SerializeObject(recent, PlanJson.Compact()));
+            File.SetLastWriteTimeUtc(ReplayPath(directory, recent), DateTime.UtcNow.AddMinutes(-1));
+            File.WriteAllText(ReplayPath(directory, oldest), JsonConvert.SerializeObject(oldest, PlanJson.Compact()));
+            using var store = new ReplayStore();
+            WaitForStorage(store, "loading"); Plugin.Framework.Tick();
+            store.AddImported(newest); WaitForStorage(store, "writes");
+            Check(store.Attempts.Count == 2 && store.Attempts[0].Id == newest.Id && store.Attempts[1].Id == recent.Id &&
+                !File.Exists(ReplayPath(directory, oldest)) && File.Exists(ReplayPath(directory, recent)) && File.Exists(ReplayPath(directory, newest)),
+                "Reloading an edited older replay must preserve the same retention order in memory and storage");
+        }
+
+        private static void ImportsDuringLoadPreserveRetentionOrder(string directory)
+        {
+            Directory.CreateDirectory(Path.Combine(directory, "replays"));
+            Plugin.PluginInterface.Directory = directory;
+            Plugin.Config.ReplayRetention = 1;
+            var previous = StoredAttempt(DateTime.UtcNow);
+            var imported = StoredAttempt(DateTime.UtcNow.AddDays(-1));
+            File.WriteAllText(ReplayPath(directory, previous), JsonConvert.SerializeObject(previous, PlanJson.Compact()));
+            using var store = new ReplayStore();
+            store.AddImported(imported);
+            WaitForStorage(store, "loading"); Plugin.Framework.Tick(); WaitForStorage(store, "writes");
+            Check(store.Attempts.Count == 1 && store.Attempts[0].Id == imported.Id &&
+                File.Exists(ReplayPath(directory, imported)) && !File.Exists(ReplayPath(directory, previous)),
+                "An import before startup results merge must use the same retention order as an import after loading");
         }
     }
 }

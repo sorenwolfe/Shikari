@@ -18,16 +18,20 @@ public sealed class ReplayStore : IDisposable
     private const int MaxFileBytes = 32 * 1024 * 1024;
     private readonly string directory;
     private readonly List<ReplayAttempt> attempts = new();
+    private readonly HashSet<string> deletedBeforeLoad = new();
+    // Owned by loading and the serialized disk queue, never by the framework/UI thread.
+    private readonly List<string> persisted = new();
     private readonly ArenaTracker tracker = new();
     private readonly Stopwatch clock = new();
     private readonly Task<List<ReplayAttempt>> loading;
-    private Task writes = Task.CompletedTask;
+    private Task writes;
     private ReplayBuffer? buffer;
     private StrategyMergeSession? strategySession;
     private LocalEvidenceCapture capture = new();
     private float nextSample;
     private bool loaded;
     private bool disposed;
+    private int retention;
     private volatile string status = string.Empty;
 
     public IReadOnlyList<ReplayAttempt> Attempts => attempts;
@@ -39,8 +43,10 @@ public sealed class ReplayStore : IDisposable
     public ReplayStore()
     {
         directory = Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "replays");
-        var retain = Math.Clamp(Plugin.Config.ReplayRetention, 1, 30);
+        retention = Math.Clamp(Plugin.Config.ReplayRetention, 1, 30);
+        var retain = retention;
         loading = Task.Run(() => Load(retain));
+        writes = loading;
         Plugin.Encounter.CombatStarted += Begin;
         Plugin.Encounter.CombatEnded += End;
         Plugin.Encounter.Wiped += Wipe;
@@ -103,10 +109,12 @@ public sealed class ReplayStore : IDisposable
             loaded = true;
             if (loading.IsCompletedSuccessfully)
             {
-                attempts.AddRange(loading.Result.Where(a => attempts.All(current => current.Id != a.Id)));
-                attempts.Sort((a, b) => b.StartedUtc.CompareTo(a.StartedUtc));
+                // Imports already added during loading stay first, just as later imports do.
+                // Load orders the saved subset identically for the UI and durable retention.
+                attempts.AddRange(loading.Result.Where(a => !deletedBeforeLoad.Contains(a.Id) && attempts.All(current => current.Id != a.Id)));
                 EvidenceRevision++;
             }
+            deletedBeforeLoad.Clear();
             Trim();
         }
         if (loaded) Trim();
@@ -208,53 +216,87 @@ public sealed class ReplayStore : IDisposable
     public void AddImported(ReplayAttempt attempt)
     {
         if (!ReplayValidation.IsValid(attempt)) throw new IOException("Replay evidence failed validation.");
-        SaveEvidence(attempt);
+        SaveEvidence(attempt, promote: true);
         attempts.RemoveAll(a => a.Id == attempt.Id);
         attempts.Insert(0, attempt);
         if (loaded) Trim();
     }
 
-    public void SaveEvidence(ReplayAttempt attempt)
+    public void SaveEvidence(ReplayAttempt attempt) => SaveEvidence(attempt, promote: false);
+
+    private void SaveEvidence(ReplayAttempt attempt, bool promote)
     {
         if (!ReplayValidation.IsValid(attempt)) throw new IOException("Replay evidence failed validation.");
         // Snapshot now, so edits made while a queued write runs cannot tear the saved file.
         var json = JsonConvert.SerializeObject(attempt, PlanJson.Compact());
         if (System.Text.Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
             throw new IOException("This replay exceeds the local file size limit.");
+        var id = attempt.Id;
+        var keep = Math.Clamp(Plugin.Config.ReplayRetention, 1, 30);
         EvidenceRevision++;
         Queue(() =>
         {
             Directory.CreateDirectory(directory);
-            AtomicFile.WriteAllText(PathFor(attempt.Id), json);
+            AtomicFile.WriteAllText(PathFor(id), json);
+            if (promote) persisted.Remove(id);
+            if (!persisted.Contains(id)) persisted.Insert(0, id);
+            TrimPersisted(keep);
         });
     }
 
     private void Trim()
     {
         var keep = Math.Clamp(Plugin.Config.ReplayRetention, 1, 30);
-        while (attempts.Count > keep) Delete(attempts[^1].Id);
+        while (attempts.Count > keep)
+        {
+            attempts.RemoveAt(attempts.Count - 1);
+            EvidenceRevision++;
+        }
+        if (keep == retention) return;
+        retention = keep;
+        Queue(() => TrimPersisted(keep));
+    }
+
+    private void TrimPersisted(int keep)
+    {
+        // Only a successfully saved replacement can displace durable evidence. A failed save
+        // may leave an older fallback on disk even though the UI has reached its retention cap.
+        while (persisted.Count > keep)
+        {
+            var id = persisted[^1];
+            File.Delete(PathFor(id));
+            persisted.RemoveAt(persisted.Count - 1);
+        }
     }
 
     public void Delete(string id)
     {
         if (!Guid.TryParseExact(id, "N", out _)) return;
+        if (!loaded) deletedBeforeLoad.Add(id);
         attempts.RemoveAll(a => a.Id == id);
         EvidenceRevision++;
-        Queue(() => { var path = PathFor(id); if (File.Exists(path)) File.Delete(path); });
+        Queue(() =>
+        {
+            var path = PathFor(id);
+            if (File.Exists(path)) File.Delete(path);
+            persisted.Remove(id);
+        });
     }
 
     public void Clear()
     {
-        // Loading has a finite bound. Queue the clear behind it so a late load cannot resurrect
-        // files deleted in the UI. Update ignores the load result once loaded is true.
+        // Queue the clear behind loading so a late load cannot resurrect files deleted in the
+        // UI. Update ignores the load result once loaded is true.
         loaded = true;
+        deletedBeforeLoad.Clear();
         attempts.Clear();
         EvidenceRevision++;
         Queue(() =>
         {
-            if (!Directory.Exists(directory)) return;
-            foreach (var path in Directory.EnumerateFiles(directory, "*.json"))
-                if (Guid.TryParseExact(Path.GetFileNameWithoutExtension(path), "N", out _)) File.Delete(path);
+            if (Directory.Exists(directory))
+                foreach (var path in Directory.EnumerateFiles(directory, "*.json"))
+                    if (Guid.TryParseExact(Path.GetFileNameWithoutExtension(path), "N", out _)) File.Delete(path);
+            persisted.Clear();
         });
     }
 
@@ -283,7 +325,7 @@ public sealed class ReplayStore : IDisposable
             var files = new DirectoryInfo(directory).EnumerateFiles("*.json")
                 .Where(f => Guid.TryParseExact(Path.GetFileNameWithoutExtension(f.Name), "N", out _))
                 .OrderByDescending(f => f.LastWriteTimeUtc).ToArray();
-            foreach (var file in files.Take(retention))
+            foreach (var file in files)
             {
                 try
                 {
@@ -291,14 +333,20 @@ public sealed class ReplayStore : IDisposable
                     var replay = JsonConvert.DeserializeObject<ReplayAttempt>(File.ReadAllText(file.FullName), PlanJson.Compact());
                     if (replay == null || replay.Id != Path.GetFileNameWithoutExtension(file.Name) || !ReplayValidation.IsValid(replay))
                         throw new IOException("Replay is incomplete or uses an unsupported format.");
-                    result.Add(replay);
+                    if (result.Count < retention)
+                    {
+                        result.Add(replay);
+                    }
+                    else file.Delete();
                 }
                 catch (Exception ex) { status = "Some saved replays could not be loaded: " + ex.Message; }
             }
-            // Only known replay files are eligible; unrelated files are never touched.
-            foreach (var file in files.Skip(retention)) file.Delete();
+            // Invalid or unsupported files remain available for recovery. They do not consume
+            // retention slots, and only validated older replays can be deleted automatically.
         }
         catch (Exception ex) { status = "Replay storage could not be read: " + ex.Message; }
+        result.Sort((a, b) => b.StartedUtc.CompareTo(a.StartedUtc));
+        persisted.AddRange(result.Select(a => a.Id));
         return result;
     }
 

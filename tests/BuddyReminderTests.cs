@@ -11,6 +11,8 @@ namespace Shikari.Tests
         private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
         public static void Run()
         {
+            AutomaticCallsWaitForCombat();
+            DisabledPendingCallsAreDiscarded();
             var plan = Plugin.Plans.Active;
             var team = Plugin.Config.GetActiveTeam();
             team.Channels = 0;
@@ -38,6 +40,7 @@ namespace Shikari.Tests
                 "Test-forced other-player calls must retain audience identity and stay out of personal guidance.");
             reminders.Dispose();
             plan.Timeline.Clear();
+            Plugin.Encounter.Begin();
             plan.Timeline.Add(new TimelineEntry { Trigger = TriggerKind.CombatTime, TimeSeconds = 10, LeadSeconds = 2, CallText = "Old mechanic" });
             using var lateReminders = new ReminderEngine();
             ActiveCall? lateCall = null;
@@ -93,6 +96,70 @@ namespace Shikari.Tests
             Check(cues.Presentation.Body == "Opening mitigation", "A newly delivered time-zero call must survive the milliseconds between combat start and buddy initialization.");
             Console.WriteLine("Buddy real reminder delivery checks passed.");
         }
+
+        private static void AutomaticCallsWaitForCombat()
+        {
+            var plan = Plugin.Plans.Active;
+            var team = Plugin.Config.GetActiveTeam();
+            team.Channels = ReminderChannel.Overlay;
+            plan.Timeline.Clear();
+            var opener = new TimelineEntry { Trigger = TriggerKind.CombatTime, TimeSeconds = 0, LeadSeconds = 5 };
+            plan.Timeline.Add(opener);
+            using var reminders = new ReminderEngine();
+            var delivered = 0;
+            reminders.CallDelivered += _ => delivered++;
+            Plugin.Framework.Tick();
+            Check(delivered == 0, "Automatic opening calls must wait for combat instead of firing while idle in a duty.");
+            Plugin.Encounter.Begin();
+            Plugin.Framework.Tick();
+            Check(delivered == 1, "A time-zero opening call must still fire when the pull begins.");
+            Plugin.Encounter.End();
+            var addedAfterPull = new TimelineEntry { Trigger = TriggerKind.CombatTime, TimeSeconds = 0 };
+            plan.Timeline.Add(addedAfterPull);
+            Plugin.Framework.Tick();
+            Check(delivered == 1, "Adding a time-zero entry after combat ends must not trigger a live call.");
+            reminders.FireNow(plan, addedAfterPull);
+            Check(delivered == 2 && reminders.ActiveCalls.Count > 0, "Manual Test calls must remain available outside combat.");
+            foreach (var call in reminders.ActiveCalls) call.ExpiresAtUtc = DateTime.UtcNow.AddSeconds(-1);
+            Plugin.Framework.Tick();
+            Check(reminders.ActiveCalls.Count == 0, "Overlay calls must still expire outside combat.");
+            Plugin.Encounter.Begin();
+            Plugin.Framework.Tick();
+            Check(delivered == 4, "A new pull must reset delivery history and fire both opening calls once.");
+            Plugin.Encounter.End();
+            plan.Timeline.Clear();
+            team.Channels = 0;
+        }
+
+        private static void DisabledPendingCallsAreDiscarded()
+        {
+            var plan = Plugin.Plans.Active;
+            plan.Timeline.Clear();
+            var entry = new TimelineEntry { Trigger = TriggerKind.BossCast, CastActionId = 801, Occurrence = 0, LeadSeconds = 0 };
+            plan.Timeline.Add(entry);
+            using var reminders = new ReminderEngine();
+            var delivered = 0;
+            reminders.CallDelivered += _ => delivered++;
+            Plugin.Encounter.Begin();
+            Plugin.Encounter.Cast(new CastEvent { ActionId = 801, Occurrence = 1, TotalCastTime = 1, StartedAtUtc = DateTime.UtcNow.AddSeconds(-2) });
+            entry.Enabled = false;
+            Plugin.Framework.Tick();
+            Check(delivered == 0, "Disabling an entry after its cast is queued must prevent delivery.");
+            entry.Enabled = true;
+            Plugin.Framework.Tick();
+            Check(delivered == 0, "Re-enabling a discarded entry must not revive the old pending call.");
+            Plugin.Encounter.Cast(new CastEvent { ActionId = 801, Occurrence = 2, TotalCastTime = 1, StartedAtUtc = DateTime.UtcNow.AddSeconds(-2) });
+            Plugin.Framework.Tick();
+            Check(delivered == 1, "A re-enabled entry must still deliver a new cast occurrence.");
+            Plugin.Encounter.Cast(new CastEvent { ActionId = 801, Occurrence = 2, TotalCastTime = 1, StartedAtUtc = DateTime.UtcNow.AddSeconds(-2) });
+            Plugin.Framework.Tick();
+            Check(delivered == 1, "Repeated scheduling of the same entry and occurrence must deliver only once.");
+            Plugin.Encounter.Cast(new CastEvent { ActionId = 801, Occurrence = 3, TotalCastTime = 1, StartedAtUtc = DateTime.UtcNow.AddSeconds(-2) });
+            Plugin.Framework.Tick();
+            Check(delivered == 2, "Occurrence identity must allow later casts of the same entry to deliver.");
+            Plugin.Encounter.End();
+            plan.Timeline.Clear();
+        }
     }
 }
 namespace Dalamud.Configuration { public interface IPluginConfiguration { int Version { get; set; } } }
@@ -118,8 +185,11 @@ namespace Shikari
     internal sealed class FakeFramework : Dalamud.Plugin.Services.IFramework { public event Action<Dalamud.Plugin.Services.IFramework>? Update; public void Tick() => Update?.Invoke(this); }
     internal sealed class FakeEncounter
     {
+        public bool InCombat;
         public float CombatElapsed; public event Action? CombatStarted; public event Action? CombatEnded; public event Action<CastEvent>? CastStarted;
-        public void Begin() => CombatStarted?.Invoke(); public void End() => CombatEnded?.Invoke(); public void Cast(CastEvent value) => CastStarted?.Invoke(value); public int OccurrenceOf(uint action) => 0;
+        public void Begin() { InCombat = true; CombatElapsed = 0; CombatStarted?.Invoke(); }
+        public void End() { InCombat = false; CombatElapsed = 0; CombatEnded?.Invoke(); }
+        public void Cast(CastEvent value) => CastStarted?.Invoke(value); public int OccurrenceOf(uint action) => 0;
     }
     internal sealed class FakeCondition { public bool this[Dalamud.Game.ClientState.Conditions.ConditionFlag flag] => true; }
     internal sealed class FakeSpeech { public void Clear() { } public void Start() { } public void Say(string text) { } }

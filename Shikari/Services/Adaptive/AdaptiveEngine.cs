@@ -48,6 +48,7 @@ public sealed class AdaptiveEngine
         public int Occurrence;
         public float SettledSince = -1;
         public readonly Dictionary<(uint, uint), StatusObservation> Statuses = new();
+        public readonly Dictionary<uint, float> SourceLessRemovals = new();
         public HashSet<int> Matches = new();
     }
     private readonly List<AdaptiveMechanic> rules;
@@ -59,6 +60,7 @@ public sealed class AdaptiveEngine
         foreach (var state in armed)
         {
             state.Statuses.Clear();
+            state.SourceLessRemovals.Clear();
             state.Matches.Clear();
             state.SettledSince = -1;
         }
@@ -99,6 +101,20 @@ public sealed class AdaptiveEngine
                 if (!state.Rule.Branches.Any(b => b.StatusId == observed.StatusId ||
                     b.AdditionalStatuses.Any(c => c.StatusId == observed.StatusId))) continue;
                 var key = (observed.StatusId, observed.SourceId);
+                // A source-less full removal invalidates every possible source, including
+                // during delayed evaluation after the acquisition window. Keep a separate
+                // tombstone so older deltas from previously unseen sources cannot revive it.
+                if (state.SourceLessRemovals.TryGetValue(observed.StatusId, out var removedAt) && removedAt > observed.Time) continue;
+                if (observed.Removed && observed.SourceId == 0)
+                {
+                    state.SourceLessRemovals[observed.StatusId] = observed.Time;
+                    foreach (var candidate in state.Statuses.Where(p => p.Key.Item1 == observed.StatusId && p.Value.Time <= observed.Time).ToArray())
+                    {
+                        changed |= !SameObservation(candidate.Value, observed);
+                        state.Statuses[candidate.Key] = observed;
+                    }
+                    continue;
+                }
                 // A late removal/refresh/change can invalidate an existing assignment, but cannot
                 // acquire a new condition after the window. Retain it as a tombstone for old deltas.
                 if (observed.Time > deadline && !state.Statuses.ContainsKey(key)) continue;

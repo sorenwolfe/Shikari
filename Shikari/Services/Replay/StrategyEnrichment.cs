@@ -69,7 +69,10 @@ public static class StrategyEnrichment
             var row = new StrategyMechanicEvidence { EntryId = entry?.Id ?? "", SlideId = entry?.SlideId ?? "",
                 Match = reason, ActionId = mechanic.ActionId, Occurrence = Math.Max(0, mechanic.Occurrence),
                 CastTime = mechanic.Time, ResolveTime = resolve, ExpectedResolveTime = mechanic.ExpectedResolve,
-                ResolveObserved = mechanic.ExpectedResolve <= attempt.Duration };
+                // Log replays exclude instant actions. A start with no paired duration has
+                // no known end time; elapsed recording time cannot supply that missing event.
+                ResolveObserved = mechanic.ExpectedResolve <= attempt.Duration &&
+                    (!isLog || mechanic.ExpectedResolve > mechanic.Time) };
             var earlier = previous?.Mechanics.FirstOrDefault(m => m.ActionId == row.ActionId && m.Occurrence == row.Occurrence &&
                 m.CastTime == row.CastTime && m.EntryId == row.EntryId);
             if (earlier != null && entry != null) row.Match = earlier.Match;
@@ -77,7 +80,9 @@ public static class StrategyEnrichment
             else
             {
                 matched++;
-                if (entry.CastActionId == 0 && mechanic.ActionId != 0)
+                // Evidence may fill an inactive draft. An enabled call has already been
+                // authored for live use; attaching a reference must not change when it fires.
+                if (!entry.Enabled && entry.CastActionId == 0 && mechanic.ActionId != 0)
                 {
                     entry.CastActionId = mechanic.ActionId;
                     entry.InferredCastActionId = mechanic.ActionId;
@@ -87,7 +92,7 @@ public static class StrategyEnrichment
                         entry.Trigger = TriggerKind.BossCast;
                     changed = true;
                 }
-                if (entry.SortTime == 0 && mechanic.Time > 0) { entry.SortTime = mechanic.Time; changed = true; }
+                if (!entry.Enabled && entry.SortTime == 0 && mechanic.Time > 0) { entry.SortTime = mechanic.Time; changed = true; }
             }
             var slide = plan.FindSlide(row.SlideId);
             if (!unchangedGeometry.TryGetValue(row.SlideId, out var geometryMatches))
@@ -164,7 +169,7 @@ public static class StrategyEnrichment
         var summary = $"{matched} mechanics linked; {unassigned} unassigned; {drafts} disabled assignment drafts added.";
         if (!attachment.EncounterVerified) summary += " Encounter identity is unverified.";
         if (unchangedGeometry.Any(p => p.Key.Length > 0 && !p.Value)) summary += " Edited board geometry needs a new calibrated recording before destination comparison.";
-        if (attachment.Mechanics.Any(m => !m.ResolveObserved)) summary += " Some expected cast endings are outside this recording; arrival is unobserved.";
+        if (attachment.Mechanics.Any(m => !m.ResolveObserved)) summary += " Some comparison times are unavailable or outside this recording; destination comparison is unavailable.";
         if (!aligned && !attempt.Frames.Any(f => f.Valid)) summary += " Position alignment is unresolved.";
         if (attachment.OmittedMechanics > 0) summary += $" {attachment.OmittedMechanics} further casts omitted from the compact summary.";
         return new(true, changed, matched, unassigned, drafts, summary);

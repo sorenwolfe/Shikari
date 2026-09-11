@@ -68,9 +68,15 @@ public static class ReplayPlayback
             var frame = attempt.Frames[i];
             if (!frame.Valid || frame.SlideId != current.SlideId || time - frame.Time > Math.Clamp(seconds, 0, 30) ||
                 previous - frame.Time > MaxSampleAge) break;
-            var matches = frame.Players.Where(p => p.SlotIndex == slot && p.Name == player.Name && p.JobId == player.JobId).ToArray();
-            if (matches.Length != 1) break;
-            result.Add(matches[0].Board);
+            ReplayPlayer? match = null;
+            foreach (var candidate in frame.Players)
+            {
+                if (candidate.SlotIndex != slot || candidate.Name != player.Name || candidate.JobId != player.JobId) continue;
+                if (match != null) { match = null; break; }
+                match = candidate;
+            }
+            if (match == null) break;
+            result.Add(match.Board);
             previous = frame.Time;
         }
         result.Reverse();

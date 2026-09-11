@@ -31,8 +31,10 @@ public sealed class StrategyMechanicEvidence
     public int Occurrence { get; set; }
     public float CastTime { get; set; }
     public float ResolveTime { get; set; }
-    /// <summary>Expected cast end, which can fall beyond the recorded pull.</summary>
+    /// <summary>Expected comparison time from the cast bar or authored clock, which can fall beyond the recorded pull.</summary>
     public float? ExpectedResolveTime { get; set; }
+    /// <summary>The expected comparison time is available and covered by the recording.
+    /// Retains its serialized name for compatibility; this does not attest cast completion or damage timing.</summary>
     public bool ResolveObserved { get; set; }
     public List<StrategyActorEvidence> Actors { get; set; } = new();
 }
@@ -44,7 +46,7 @@ public sealed class StrategyActorEvidence
     public uint JobId { get; set; }
     public List<StrategyStatusEvidence> Statuses { get; set; } = new();
     public List<StrategyPositionEvidence> Positions { get; set; } = new();
-    /// <summary>Board units at resolve, only for a calibrated fresh observation and unique authored destination.</summary>
+    /// <summary>Board units at the expected comparison time, only for a calibrated fresh observation and unique authored destination.</summary>
     public float? DestinationDistance { get; set; }
 }
 

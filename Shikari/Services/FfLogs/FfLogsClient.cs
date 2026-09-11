@@ -232,6 +232,8 @@ public sealed class FfLogsClient : IDisposable
         var results = new List<LogCast>();
         var startTime = (double)fight.StartTime;
         var pages = 0;
+        var count = 0;
+        var finished = false;
 
         // begincast marks the bar going up, cast marks it resolving. Pair them so a step knows how
         // long its cast bar is; abilities with no begincast are instants.
@@ -247,7 +249,7 @@ public sealed class FfLogsClient : IDisposable
                     fightIDs: [{{fight.Id}}]
                     dataType: Casts
                     hostilityType: {{hostility}}
-                    startTime: {{startTime.ToString("0", System.Globalization.CultureInfo.InvariantCulture)}}
+                    startTime: {{startTime.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}}
                     endTime: {{fight.EndTime}}
                     limit: 10000
                   ) {
@@ -264,7 +266,12 @@ public sealed class FfLogsClient : IDisposable
             var rows = events?["data"] as JArray;
 
             if (rows == null)
-                break;
+                throw new FfLogsException("FF Logs returned no readable cast event page. Retry the import.");
+            // Occurrence numbers require a complete cast history. Do not return a silently
+            // truncated list that optional, separately fetched evidence might label complete.
+            if (count + (long)rows.Count > 200000)
+                throw new FfLogsException("FF Logs cast history exceeded the event limit. Choose a shorter pull.");
+            count += rows.Count;
 
             foreach (var row in rows)
             {
@@ -330,13 +337,20 @@ public sealed class FfLogsClient : IDisposable
                 });
             }
 
-            var next = events?.Value<double?>("nextPageTimestamp");
-            if (next == null)
+            var nextToken = events?["nextPageTimestamp"];
+            if (nextToken?.Type == JTokenType.Null)
+            {
+                finished = true;
                 break;
+            }
+            if (!LogEvidenceParser.Number(nextToken, out var next) || next <= startTime || next > fight.EndTime)
+                throw new FfLogsException("FF Logs returned an invalid cast pagination cursor. Retry the import.");
 
-            startTime = next.Value;
+            startTime = next;
         }
 
+        if (!finished)
+            throw new FfLogsException("FF Logs cast history reached the page limit. Choose a shorter pull.");
         return results.OrderBy(c => c.TimeSeconds).ToList();
     }
 

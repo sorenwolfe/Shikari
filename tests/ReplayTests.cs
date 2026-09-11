@@ -23,6 +23,7 @@ public static class ReplayTests
 
     public static void Run()
     {
+        TrailSamplesStayConservative();
         var plan = PlanDocument.CreateDefault();
         plan.Slides[0].Id = "slide";
         plan.Slides[0].Items.Add(new CanvasItem { Kind = CanvasItemKind.PlayerToken, SlotIndex = 0, Position = new(0.5f, 0.5f) });
@@ -102,5 +103,32 @@ public static class ReplayTests
         adaptive.AdaptiveDecisions[0].Applied = false;
         Check(ReplayPlayback.DistanceAt(adaptive, checkpoint, 0) == null, "Suppressed branch is not scored as applied");
         Console.WriteLine($"PASS: {checks} replay assertions");
+    }
+
+    private static void TrailSamplesStayConservative()
+    {
+        var attempt = new ReplayAttempt { Duration = 1, Frames = new() { Frame(0), Frame(.1f), Frame(.2f) } };
+        attempt.Frames[0].Players[0].Board = new(.1f, .2f);
+        attempt.Frames[1].Players[0].Board = new(.3f, .4f);
+        attempt.Frames[2].Players[0].Board = new(.5f, .6f);
+        Check(ReplayPlayback.Trail(attempt, .2f, 0).SequenceEqual(new[] { new Vector2(.1f, .2f), new Vector2(.3f, .4f), new Vector2(.5f, .6f) }),
+            "Trails retain the exact recorded samples in chronological order.");
+        Check(ReplayPlayback.Trail(attempt, .2f, -1).Count == 0, "An unassigned seat has no trail.");
+        var middle = attempt.Frames[1].Players[0];
+        attempt.Frames[1].Players.Add(new ReplayPlayer { Name = middle.Name, JobId = middle.JobId, SlotIndex = middle.SlotIndex, Board = Vector2.Zero });
+        Check(ReplayPlayback.Trail(attempt, .2f, 0).Count == 1, "Duplicate matching actors in an older frame terminate the trail.");
+        attempt.Frames[1].Players.RemoveAt(1);
+        var current = attempt.Frames[2].Players[0];
+        attempt.Frames[2].Players.Add(new ReplayPlayer { Name = current.Name, JobId = current.JobId, SlotIndex = current.SlotIndex, Board = Vector2.Zero });
+        Check(ReplayPlayback.Trail(attempt, .2f, 0).Count == 0, "Duplicate matching actors in the current frame cannot start a trail.");
+        attempt.Frames[2].Players.RemoveAt(1);
+        middle.JobId = 1;
+        Check(ReplayPlayback.Trail(attempt, .2f, 0).Count == 1, "A changed job cannot connect actor identities across samples.");
+        middle.JobId = 0;
+        attempt.Frames[1].Players.Clear();
+        Check(ReplayPlayback.Trail(attempt, .2f, 0).Count == 1, "Missing actor samples terminate the trail.");
+        attempt.Frames[1].Players.Add(middle);
+        attempt.Frames[2].Time = .5f;
+        Check(ReplayPlayback.Trail(attempt, .5f, 0).Count == 1, "Trails cannot bridge a sample gap beyond the hold limit.");
     }
 }

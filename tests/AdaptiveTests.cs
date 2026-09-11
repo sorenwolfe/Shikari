@@ -10,6 +10,7 @@ public static class AdaptiveTests
     {
         CompoundRules();
         PermanentStatuses();
+        SourceLessRemoval();
         var tracker = new StatusTracker();
         Check(tracker.Observe(new[] { new StatusSample(10, 30, 0, 99) }, 0).Count == 0, "First snapshot establishes baseline");
         var lost = tracker.Observe(Array.Empty<StatusSample>(), 1);
@@ -82,6 +83,37 @@ public static class AdaptiveTests
         engine.Update(gained, 1);
         Check(engine.Update(Array.Empty<StatusObservation>(), 15)[0].SlideId == "",
             "Permanent status unknown duration cannot satisfy a bounded duration branch");
+    }
+
+    private static void SourceLessRemoval()
+    {
+        var plan = PlanDocument.CreateDefault();
+        var rule = new AdaptiveMechanic { Enabled = true, TerritoryId = 1, AnchorActionId = 100, WindowSeconds = 5 };
+        rule.Branches.Add(new StatusBranch { StatusId = 10, SlideId = plan.Slides[0].Id });
+        plan.AdaptiveMechanics.Add(rule);
+        AdaptiveEngine NewEngine() { var e = new AdaptiveEngine(plan, 1); e.Arm(100, 1, 0); return e; }
+        StatusObservation Status(uint source, float time, bool removed = false) => new() {
+            StatusId = 10, SourceId = source, Time = time, Duration = 30, Removed = removed };
+        var empty = Array.Empty<StatusObservation>();
+        var engine = NewEngine();
+        engine.Update(new[] { Status(9, 1), Status(8, 1) }, 1);
+        engine.Update(new[] { Status(0, 1.1f, true) }, 1.1f);
+        Check(engine.Update(empty, 1.5f).Count == 0, "Source-less removal invalidates all possible sources before assignment settles");
+        engine.Update(new[] { Status(9, 1), Status(7, 1) }, 1.6f);
+        Check(engine.Update(empty, 2).Count == 0, "Old observations from known or previously unseen sources cannot cross a source-less removal");
+        engine.Update(new[] { Status(9, 2.1f) }, 2.1f);
+        Check(engine.Update(empty, 2.5f)[0].SlideId == plan.Slides[0].Id, "A fresh application restores evidence after source-less removal");
+        engine = NewEngine();
+        engine.Update(new[] { Status(9, 1), Status(8, 1) }, 1);
+        engine.Update(new[] { Status(9, 1.1f, true) }, 1.1f);
+        Check(engine.Update(empty, 1.5f)[0].SlideId == plan.Slides[0].Id, "A specific-source removal preserves another source's active assignment");
+        engine = NewEngine();
+        engine.Update(new[] { Status(9, 4.6f) }, 4.6f);
+        Check(engine.Update(new[] { Status(0, 5.1f, true) }, 5.4f)[0].SlideId == "",
+            "Source-less removal after the deadline still invalidates a pending delayed decision");
+        engine = NewEngine();
+        engine.Update(new[] { Status(9, 1), Status(0, 1.1f, true), Status(9, 1.1f) }, 1.1f);
+        Check(engine.Update(empty, 1.5f)[0].SlideId == plan.Slides[0].Id, "Server order permits a fresh same-timestamp reapplication after removal");
     }
 
     private static void CompoundRules()

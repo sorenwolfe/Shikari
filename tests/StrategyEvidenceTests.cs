@@ -63,6 +63,18 @@ public static class StrategyEvidenceTests
         plan.Timeline[0].CastActionId = 42; plan.Timeline[0].SortTime = 9; plan.Timeline[0].Label = "Authored label";
         Check(StrategyEnrichment.Apply(plan, attempt).MatchedMechanics == 1 && plan.Timeline[0].SortTime == 9, "Verified action ID wins and authored timing survives");
 
+        foreach (var trigger in new[] { TriggerKind.CombatTime, TriggerKind.BossCast, TriggerKind.AfterCast, TriggerKind.Predicted })
+        {
+            (plan, attempt) = Fixture();
+            plan.Timeline[0].Enabled = true;
+            plan.Timeline[0].Trigger = trigger;
+            var authoredEntry = JsonConvert.SerializeObject(plan.Timeline[0]);
+            result = StrategyEnrichment.Apply(plan, attempt);
+            Check(result.Accepted && result.MatchedMechanics == 1, "An enabled authored entry can receive an evidence reference");
+            Check(JsonConvert.SerializeObject(plan.Timeline[0]) == authoredEntry,
+                "Name-matched evidence must not rewrite the trigger, action anchor, or timing of an enabled " + trigger + " call");
+        }
+
         (plan, attempt) = Fixture();
         plan.Timeline.Add(new TimelineEntry { Label = "Akh Morn", SlideId = plan.Slides[0].Id });
         result = StrategyEnrichment.Apply(plan, attempt);
@@ -85,6 +97,19 @@ public static class StrategyEvidenceTests
             StrategyEnrichment.Apply(plan, attempt);
             Check(plan.AdaptiveMechanics.Count == 0, condition + " must not become an adaptive assignment");
         }
+
+        (plan, attempt) = Fixture(false);
+        attempt.Evidence.Source = "FF Logs";
+        attempt.Evidence.ReportCode = "abcdefghijklmnop";
+        attempt.Evidence.FightId = 1;
+        attempt.Mechanics[0].ExpectedResolve = attempt.Mechanics[0].Time;
+        attempt.Evidence.Statuses[0].Time = attempt.Mechanics[0].Time;
+        Calibrate(attempt);
+        result = StrategyEnrichment.Apply(plan, attempt);
+        Check(result.Accepted && result.MatchedMechanics == 1, "An interrupted log cast remains useful as a timeline start anchor");
+        Check(!plan.StrategyEvidence.Single().Mechanics.Single().ResolveObserved &&
+            plan.StrategyEvidence.Single().Mechanics.Single().Actors.Single().DestinationDistance == null && result.DraftsAdded == 0,
+            "An unpaired FF Logs cast start cannot establish an end-time destination or assignment draft");
 
         (plan, attempt) = Fixture(false);
         StrategyEnrichment.Apply(plan, attempt);

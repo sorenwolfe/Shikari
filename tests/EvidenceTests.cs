@@ -58,6 +58,28 @@ public static class EvidenceTests
         var stacked = new EvidenceTimeline(stacks);
         Check(stacked.StatusesAt(1, 4).Single().Parameter == 2, "Stack count never overwrites a verified parameter");
         Check(stacked.StatusesAt(1, 6).Count == 0, "Stack updates do not erase expiry time");
+        foreach (var missingSource in new long[] { 0, -1 })
+        {
+            var removed = new ReplayEvidence();
+            removed.Statuses.AddRange(new[] {
+                new EvidenceStatus { ActorId=1, SourceId=9, StatusId=10, AbilityId=1000010, Time=1, Duration=30 },
+                new EvidenceStatus { ActorId=1, SourceId=8, StatusId=10, AbilityId=1000010, Time=1, Duration=30 },
+                new EvidenceStatus { ActorId=1, SourceId=9, StatusId=11, AbilityId=1000011, Time=1, Duration=30 },
+                new EvidenceStatus { ActorId=2, SourceId=9, StatusId=10, AbilityId=1000010, Time=1, Duration=30 },
+                new EvidenceStatus { ActorId=1, SourceId=missingSource, StatusId=10, AbilityId=1000010, Time=2, Change="remove" },
+            });
+            var lifecycle = new EvidenceTimeline(removed);
+            Check(lifecycle.StatusesAt(1, 2).All(s => s.StatusId != 10), "Source-less full removal invalidates every possible prior source");
+            Check(lifecycle.StatusesAt(1, 2).Single().StatusId == 11 && lifecycle.StatusesAt(2, 2).Count == 1,
+                "Source-less removal stays scoped to the exact status and actor");
+            removed.Statuses.Add(new EvidenceStatus { ActorId=1, SourceId=9, StatusId=10, AbilityId=1000010, Time=2, Change="refresh", Duration=30 });
+            Check(new EvidenceTimeline(removed).StatusesAt(1, 2).Count == 2, "Later same-timestamp refresh can re-establish status evidence");
+            removed.Statuses[4].SourceId = 9;
+            Check(new EvidenceTimeline(removed).StatusesAt(1, 2).Count == 3, "Specific-source removal preserves another known source");
+            removed.Statuses[4].SourceId = missingSource; removed.Statuses[4].Change = "stacks";
+            Check(new EvidenceTimeline(removed).StatusesAt(1, 2).Count(s => s.StatusId == 10) >= 2,
+                "Source-less stack decrement is not a full status removal");
+        }
         Console.WriteLine("PASS: evidence status lifecycle, actor isolation, backward seeking, sparse positions and calibration");
     }
 }

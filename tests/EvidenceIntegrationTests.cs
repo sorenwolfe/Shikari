@@ -14,6 +14,7 @@ namespace Shikari.Tests
         private static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
         public static void Run()
         {
+            SourceLessLogRemoval();
             var plan = PlanDocument.CreateDefault();
             plan.Name = "Caro reference";
             plan.Timeline.Add(new TimelineEntry { CastActionId = 123, Occurrence = 2, SlideId = plan.Slides[0].Id });
@@ -61,6 +62,30 @@ namespace Shikari.Tests
             Check(JsonConvert.DeserializeObject<ReplayPlayer>("{\"Name\":\"Legacy first seat\"}", PlanJson.Compact())!.SlotIndex == 0,
                 "Legacy compact replay players with omitted seat retain seat zero");
             Console.WriteLine("PASS: log-to-replay import, exact anchor matching, rule drafting/simulation, ID validation and backwards serialization");
+        }
+
+        private static void SourceLessLogRemoval()
+        {
+            foreach (var sourceField in new[] { "", "\"sourceID\":-1," })
+            {
+                var plan = PlanDocument.CreateDefault();
+                var fight = new LogFight { Id = 1, StartTime = 10000, EndTime = 20000 };
+                var data = new LogFightData { ReportCode = "FIXTURE", Fight = fight };
+                data.Actors.Add(new LogActor { Id = 1, Name = "Fixture Player", Type = "Player" });
+                data.EnemyCasts.Add(new LogCast { AbilityId = 100, IsCastStart = true, TimeSeconds = 1, CastSeconds = 3 });
+                var parser = new LogEvidenceParser(fight);
+                parser.AddPage(Newtonsoft.Json.Linq.JArray.Parse("[" +
+                    "{\"timestamp\":12000,\"type\":\"applybuff\",\"sourceID\":9,\"targetID\":1,\"abilityGameID\":1000010,\"duration\":30000}," +
+                    "{\"timestamp\":12100,\"type\":\"removebuff\"," + sourceField + "\"targetID\":1,\"abilityGameID\":1000010}]"));
+                var attempt = LogReplayBuilder.Build(plan, data, parser.Result, id => id == 10, _ => 0);
+                Check(new EvidenceTimeline(attempt.Evidence).StatusesAt(1, 2.2f).Count == 0,
+                    "A parsed source-less FF Logs removal must close the imported active status");
+                var rule = new AdaptiveMechanic { TerritoryId = 1, AnchorActionId = 100, WindowSeconds = 5 };
+                rule.Branches.Add(new StatusBranch { StatusId = 10, SlideId = plan.Slides[0].Id });
+                var decisions = EvidenceRules.Simulate(attempt, 1, rule);
+                Check(decisions.Count == 1 && decisions[0].SlideId == "",
+                    "An imported status removed before settling must not reproduce a live assignment");
+            }
         }
     }
 }

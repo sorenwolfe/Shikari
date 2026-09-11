@@ -28,6 +28,9 @@ public sealed partial class MainWindow
                     if (!ImGui.TreeNode($"{mechanic.CastTime:0.0}s  {label} / {mechanic.Match}##{mechanic.ActionId}-{mechanic.Occurrence}-{mechanic.CastTime}")) continue;
                     var slide = plan.FindSlide(mechanic.SlideId);
                     if (slide != null) ImGui.TextWrapped("Board: " + slide.Title);
+                    ImGui.TextWrapped(mechanic.ResolveObserved
+                        ? $"Expected comparison time: {mechanic.ResolveTime:0.0}s. Actual effect timing is not verified."
+                        : "The expected comparison time is unavailable or outside this recording.");
                     foreach (var actor in mechanic.Actors)
                     {
                         var seat = actor.SlotIndex >= 0 && actor.SlotIndex < plan.Roster.Count
