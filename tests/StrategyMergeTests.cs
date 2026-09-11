@@ -34,6 +34,28 @@ public static class StrategyMergeTests
         var switched = JsonConvert.DeserializeObject<PlanDocument>(JsonConvert.SerializeObject(plan))!;
         switched.Id = Guid.NewGuid().ToString("N");
         Check(!new StrategyMergeSession(plan).Matches(switched), "Switching plans rejects a pending source");
+        var backgroundPlan = PlanDocument.CreateDefault();
+        backgroundPlan.Slides[0].Title = "Alpha";
+        var backgroundSession = new StrategyMergeSession(backgroundPlan);
+        var backgroundAttempt = new ReplayBuffer(backgroundPlan, -1, DateTime.UtcNow).Attempt;
+        backgroundAttempt.Duration = 30;
+        backgroundAttempt.Mechanics.Add(new ReplayMechanic { ActionId = 42, Occurrence = 1, Label = "Alpha", Time = 10, ExpectedResolve = 12 });
+        var untouched = JsonConvert.SerializeObject(backgroundPlan);
+        var prepared = backgroundSession.Prepare(backgroundAttempt);
+        Check(untouched == JsonConvert.SerializeObject(backgroundPlan), "Preparation must not mutate the live plan");
+        Check(prepared.Result.Accepted && prepared.Result.Changed, "Preparation computes the complete result before commit");
+        backgroundPlan.Notes = "Changed after preparation";
+        Check(!backgroundSession.Commit(backgroundPlan, prepared, () => throw new Exception("Stale commit")).Accepted,
+            "Commit rechecks edits after background preparation");
+        backgroundPlan.Notes = "";
+        failed = false;
+        try { backgroundSession.Commit(backgroundPlan, prepared, () => false); } catch (InvalidOperationException) { failed = true; }
+        Check(failed && untouched == JsonConvert.SerializeObject(backgroundPlan), "Prepared result rolls back after a failed save");
+        var owner = new StrategyMergeSession(backgroundPlan);
+        Check(!owner.Commit(backgroundPlan, prepared, () => throw new Exception("Foreign commit")).Accepted,
+            "A prepared result cannot be committed by another source session");
+        Check(backgroundSession.Commit(backgroundPlan, prepared, () => true).Accepted && backgroundPlan.Timeline.Count == 1,
+            "The unchanged plan can commit a prepared result");
         Console.WriteLine("PASS: staged enrichment, rollback, autosave, stale edits, switched plans, replay links and idempotence");
     }
 }

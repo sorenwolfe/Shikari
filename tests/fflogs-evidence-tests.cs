@@ -46,9 +46,9 @@ public static async Task Run() {
         "{\"data\":{\"reportData\":{\"report\":{\"masterData\":{\"actors\":[],\"abilities\":[]}}}}}",
         Page("""
         [{"timestamp":11000,"type":"begincast","sourceID":1,"abilityGameID":100},
-         {"timestamp":12000,"type":"begincast","sourceID":1,"abilityGameID":100},
-         {"timestamp":14000,"type":"cast","sourceID":1,"abilityGameID":100},
-         {"timestamp":15000,"type":"cast","sourceID":1,"abilityGameID":200}]
+         {"timestamp":12000,"type":"begincast","sourceID":1,"targetID":2,"abilityGameID":100},
+         {"timestamp":14000,"type":"cast","sourceID":1,"targetID":3,"abilityGameID":100},
+         {"timestamp":15000,"type":"cast","sourceID":1,"targetID":3,"abilityGameID":200}]
         """), Page("[]")) { RequireEvidenceQuery=false })) {
         var data=await client.GetFightDataAsync("id","secret","code",Fight);
         var castStart=typeof(LogCast).GetProperty("IsCastStart");
@@ -57,6 +57,12 @@ public static async Task Run() {
         Check((bool)castStart!.GetValue(data.EnemyCasts[0])! && data.EnemyCasts[0].CastSeconds==0, "Interrupted begincast remains a cast start without inventing duration");
         Check((bool)castStart.GetValue(data.EnemyCasts[1])! && data.EnemyCasts[1].CastSeconds==2, "Paired completed cast retains its observed start");
         Check(!(bool)castStart.GetValue(data.EnemyCasts[2])!, "Instant action must not become a cast-bar occurrence");
+        var serialized = JArray.FromObject(data.EnemyCasts);
+        Check(serialized[0]["CompletionTimeSeconds"]?.Type == JTokenType.Null &&
+            serialized[1].Value<float?>("CompletionTimeSeconds") == 4 && serialized[2].Value<float?>("CompletionTimeSeconds") == 5,
+            "Explicit cast completion timestamps survive parsing while unpaired starts remain unknown");
+        Check(serialized[0]["TargetId"]?.Type == JTokenType.Null && serialized[1].Value<int?>("TargetId") == 2 &&
+            serialized[2].Value<int?>("TargetId") == 3, "Cast-start target must not be replaced by a later completion target");
     }
     await CastPagination();
     var parser=new LogEvidenceParser(Fight, new Dictionary<uint,string>{{1000048,"Well Fed"}});

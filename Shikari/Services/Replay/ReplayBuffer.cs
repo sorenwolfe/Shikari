@@ -12,6 +12,7 @@ public sealed class ReplayBuffer
     public const float MaxDuration = 1800f;
     public const int MaxFrames = 18001;
     public const int MaxMechanics = 1000;
+    public const int MaxCasts = 1000;
     private bool finished;
     public ReplayAttempt Attempt { get; }
 
@@ -56,6 +57,19 @@ public sealed class ReplayBuffer
             Time = mechanic.Time, ExpectedResolve = mechanic.ExpectedResolve });
     }
 
+    public void AddCast(RecordedCast cast)
+    {
+        if (finished) return;
+        if (Attempt.Casts.Count >= MaxCasts || !cast.IsValid(MaxDuration))
+        {
+            Attempt.Evidence.Complete = false;
+            const string warning = "Some live cast observations were invalid or exceeded the recording limit.";
+            if (!Attempt.Evidence.Warnings.Contains(warning)) Attempt.Evidence.Warnings.Add(warning);
+            return;
+        }
+        Attempt.Casts.Add(cast.Snapshot());
+    }
+
     public ReplayAttempt? Finish(string reason, float duration)
     {
         if (finished) return null;
@@ -63,6 +77,7 @@ public sealed class ReplayBuffer
         if (Attempt.Frames.Count == 0) return null;
         Attempt.Duration = Math.Clamp(float.IsFinite(duration) ? Math.Max(duration, Attempt.Duration) : Attempt.Duration, 0, MaxDuration);
         Attempt.EndReason = reason;
+        Attempt.Casts.RemoveAll(c => !c.IsValid(Attempt.Duration));
         Attempt.Mechanics.Sort((a, b) => a.Time.CompareTo(b.Time));
         return Attempt;
     }

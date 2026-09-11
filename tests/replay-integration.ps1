@@ -5,7 +5,9 @@ $sources += "$root/Shikari/Services/PlanJson.cs", "$root/Shikari/Services/Storag
 $sources += @("ReplayAttempt", "ReplayBuffer", "ReplayPlayback", "ReplayValidation", "ReplayStore", "StrategyMergeSession", "StrategyEnrichment", "EvidenceTimeline", "EvidenceRules" | ForEach-Object { "$root/Shikari/Services/Replay/$_.cs" })
 $sources += "$root/Shikari/Services/Live/WorldAlignment.cs", "$root/Shikari/Services/Adaptive/AdaptiveEngine.cs"
 $sources += "$PSScriptRoot/ReplayIntegrationStubs.cs"
+$sources += "$PSScriptRoot/ReplayBackgroundTests.cs"
 $sources += "$root/Shikari/Services/Replay/ReplayEvidence.cs"
+$sources += "$root/Shikari/Services/Replay/RecordedCast.cs"
 $refs = @(Get-ChildItem "$PSHOME/ref/*.dll" | ForEach-Object FullName) + "$PSHOME/Newtonsoft.Json.dll"
 Add-Type -Path $sources -ReferencedAssemblies $refs -CompilerOptions '/nullable:enable','/nowarn:1701'
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('shikari-replay-' + [guid]::NewGuid().ToString('N'))

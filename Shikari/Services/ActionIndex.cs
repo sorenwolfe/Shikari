@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -49,18 +50,22 @@ public sealed class JobEntry
 /// </summary>
 public sealed class ActionIndex
 {
-    private readonly List<ActionEntry> playerActions = new();
-    private readonly List<ActionEntry> playerCooldowns = new();
-    private readonly List<ActionEntry> allActions = new();
-    private readonly Dictionary<uint, ActionEntry> byId = new();
-    private readonly Dictionary<uint, JobEntry> jobsById = new();
+    // Construction owns its mutable collections exclusively. Readers only ever see one
+    // completed snapshot, published with the same memory barrier that makes Ready true.
+    private sealed record Snapshot(
+        IReadOnlyList<ActionEntry> PlayerActions,
+        IReadOnlyList<ActionEntry> PlayerCooldowns,
+        IReadOnlyList<ActionEntry> AllActions,
+        FrozenDictionary<uint, ActionEntry> ById,
+        FrozenDictionary<uint, JobEntry> JobsById,
+        IReadOnlyList<JobEntry> Jobs,
+        FrozenDictionary<uint, FrozenSet<uint>> CategoryJobs);
 
-    /// <summary>Category row id to the set of ClassJob row ids it covers.</summary>
-    private readonly Dictionary<uint, HashSet<uint>> categoryJobs = new();
+    private Snapshot? snapshot;
 
-    public bool Ready { get; private set; }
+    public bool Ready => Volatile.Read(ref snapshot) != null;
 
-    public IReadOnlyList<JobEntry> Jobs { get; private set; } = Array.Empty<JobEntry>();
+    public IReadOnlyList<JobEntry> Jobs => Volatile.Read(ref snapshot)?.Jobs ?? Array.Empty<JobEntry>();
 
     /// <summary>Kick off the index build on a worker thread; the UI stays responsive meanwhile.</summary>
     public Task BuildAsync(CancellationToken cancel = default)
@@ -69,19 +74,20 @@ public sealed class ActionIndex
         {
             try
             {
-                if (cancel.IsCancellationRequested)
-                    return;
-
-                Build();
+                cancel.ThrowIfCancellationRequested();
+                var built = Build(cancel);
 
                 // Unloaded while we were reading sheets. Say nothing and touch nothing.
-                if (cancel.IsCancellationRequested)
-                    return;
+                cancel.ThrowIfCancellationRequested();
 
-                Ready = true;
+                Volatile.Write(ref snapshot, built);
                 Plugin.Log.Information(
                     "Action index ready: {Cooldowns} cooldowns of {Player} player actions, {All} total, {Jobs} jobs.",
-                    playerCooldowns.Count, playerActions.Count, allActions.Count, jobsById.Count);
+                    built.PlayerCooldowns.Count, built.PlayerActions.Count, built.AllActions.Count, built.JobsById.Count);
+            }
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+            {
+                // Cancellation is normal during unload; no partial snapshot is published.
             }
             catch (Exception ex)
             {
@@ -90,75 +96,90 @@ public sealed class ActionIndex
         });
     }
 
-    private void Build()
+    private static Snapshot Build(CancellationToken cancel)
     {
-        BuildJobs();
+        var playerActions = new List<ActionEntry>();
+        var playerCooldowns = new List<ActionEntry>();
+        var allActions = new List<ActionEntry>();
+        var byId = new Dictionary<uint, ActionEntry>();
+        var jobsById = new Dictionary<uint, JobEntry>();
+        var jobs = BuildJobs(jobsById, cancel);
 
+        cancel.ThrowIfCancellationRequested();
         var actionSheet = Plugin.DataManager.GetExcelSheet<LuminaAction>();
-        if (actionSheet == null)
-            return;
-
-        foreach (var row in actionSheet)
+        if (actionSheet != null)
         {
-            if (row.RowId == 0)
-                continue;
-
-            var name = row.Name.ExtractText();
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
-
-            var jobId = row.ClassJob.RowId;
-            // ClassJob is stored as -1 (0xFFFFFFFF) for actions with no owning job.
-            if (jobId == uint.MaxValue)
-                jobId = 0;
-
-            var isPlayerAction = !row.IsPvP && (row.ClassJobLevel > 0 || row.IsRoleAction);
-
-            var recast = row.Recast100ms / 10f;
-            var isCooldown = ActionFilter.IsCooldown(recast, row.IsRoleAction, isPlayerAction);
-
-            var entry = new ActionEntry
+            foreach (var row in actionSheet)
             {
-                RowId = row.RowId,
-                Name = name,
-                SearchName = name.ToLowerInvariant(),
-                IconId = row.Icon,
-                ClassJobId = jobId,
-                CategoryId = row.ClassJobCategory.RowId,
-                IsRoleAction = row.IsRoleAction,
-                IsPlayerAction = isPlayerAction,
-                Level = row.ClassJobLevel,
-                RecastSeconds = recast,
-                IsCooldown = isCooldown,
-                JobAbbreviation = jobsById.TryGetValue(jobId, out var job) ? job.Abbreviation : string.Empty,
-            };
+                cancel.ThrowIfCancellationRequested();
+                if (row.RowId == 0)
+                    continue;
 
-            allActions.Add(entry);
-            byId[entry.RowId] = entry;
+                var name = row.Name.ExtractText();
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
 
-            if (isPlayerAction)
-                playerActions.Add(entry);
+                var jobId = row.ClassJob.RowId;
+                // ClassJob is stored as -1 (0xFFFFFFFF) for actions with no owning job.
+                if (jobId == uint.MaxValue)
+                    jobId = 0;
 
-            if (isCooldown)
-                playerCooldowns.Add(entry);
+                var isPlayerAction = !row.IsPvP && (row.ClassJobLevel > 0 || row.IsRoleAction);
+
+                var recast = row.Recast100ms / 10f;
+                var isCooldown = ActionFilter.IsCooldown(recast, row.IsRoleAction, isPlayerAction);
+
+                var entry = new ActionEntry
+                {
+                    RowId = row.RowId,
+                    Name = name,
+                    SearchName = name.ToLowerInvariant(),
+                    IconId = row.Icon,
+                    ClassJobId = jobId,
+                    CategoryId = row.ClassJobCategory.RowId,
+                    IsRoleAction = row.IsRoleAction,
+                    IsPlayerAction = isPlayerAction,
+                    Level = row.ClassJobLevel,
+                    RecastSeconds = recast,
+                    IsCooldown = isCooldown,
+                    JobAbbreviation = jobsById.TryGetValue(jobId, out var job) ? job.Abbreviation : string.Empty,
+                };
+
+                allActions.Add(entry);
+                byId[entry.RowId] = entry;
+
+                if (isPlayerAction)
+                    playerActions.Add(entry);
+
+                if (isCooldown)
+                    playerCooldowns.Add(entry);
+            }
         }
 
+        cancel.ThrowIfCancellationRequested();
         allActions.Sort(static (a, b) => string.CompareOrdinal(a.SearchName, b.SearchName));
         playerActions.Sort(static (a, b) => string.CompareOrdinal(a.SearchName, b.SearchName));
         playerCooldowns.Sort(static (a, b) => string.CompareOrdinal(a.SearchName, b.SearchName));
 
-        BuildCategoryMap();
+        var categoryJobs = BuildCategoryMap(jobsById, cancel);
+        cancel.ThrowIfCancellationRequested();
+        return new Snapshot(
+            playerActions.AsReadOnly(), playerCooldowns.AsReadOnly(), allActions.AsReadOnly(),
+            byId.ToFrozenDictionary(), jobsById.ToFrozenDictionary(), jobs,
+            categoryJobs.ToFrozenDictionary());
     }
 
-    private void BuildJobs()
+    private static IReadOnlyList<JobEntry> BuildJobs(Dictionary<uint, JobEntry> jobsById, CancellationToken cancel)
     {
+        cancel.ThrowIfCancellationRequested();
         var sheet = Plugin.DataManager.GetExcelSheet<ClassJob>();
         if (sheet == null)
-            return;
+            return Array.Empty<JobEntry>();
 
         var list = new List<JobEntry>();
         foreach (var row in sheet)
         {
+            cancel.ThrowIfCancellationRequested();
             if (row.RowId == 0)
                 continue;
 
@@ -180,26 +201,31 @@ public sealed class ActionIndex
             list.Add(entry);
         }
 
-        Jobs = list
+        cancel.ThrowIfCancellationRequested();
+        return list
             .OrderByDescending(j => j.IsCombatJob)
             .ThenBy(j => (int)j.Role)
             .ThenBy(j => j.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .ToList().AsReadOnly();
     }
 
     /// <summary>
     /// ClassJobCategory exposes one boolean column per job abbreviation. Reading them once at
     /// startup gives a cheap "can job X use category Y" lookup for the rest of the session.
     /// </summary>
-    private void BuildCategoryMap()
+    private static Dictionary<uint, FrozenSet<uint>> BuildCategoryMap(
+        Dictionary<uint, JobEntry> jobsById, CancellationToken cancel)
     {
+        cancel.ThrowIfCancellationRequested();
+        var categoryJobs = new Dictionary<uint, FrozenSet<uint>>();
         var sheet = Plugin.DataManager.GetExcelSheet<ClassJobCategory>();
         if (sheet == null)
-            return;
+            return categoryJobs;
 
         var accessors = new List<(uint JobId, PropertyInfo Property)>();
         foreach (var job in jobsById.Values)
         {
+            cancel.ThrowIfCancellationRequested();
             var prop = typeof(ClassJobCategory).GetProperty(
                 job.Abbreviation,
                 BindingFlags.Public | BindingFlags.Instance);
@@ -209,10 +235,12 @@ public sealed class ActionIndex
 
         foreach (var row in sheet)
         {
+            cancel.ThrowIfCancellationRequested();
             var set = new HashSet<uint>();
             object boxed = row;
             foreach (var (jobId, prop) in accessors)
             {
+                cancel.ThrowIfCancellationRequested();
                 try
                 {
                     if (prop.GetValue(boxed) is true)
@@ -224,11 +252,12 @@ public sealed class ActionIndex
                 }
             }
 
-            categoryJobs[row.RowId] = set;
+            categoryJobs[row.RowId] = set.ToFrozenSet();
         }
+        return categoryJobs;
     }
 
-    public ActionEntry? Get(uint actionId) => byId.GetValueOrDefault(actionId);
+    public ActionEntry? Get(uint actionId) => Volatile.Read(ref snapshot)?.ById.GetValueOrDefault(actionId);
 
     public string NameOf(uint actionId, string fallback = "")
     {
@@ -238,17 +267,19 @@ public sealed class ActionIndex
         return string.IsNullOrEmpty(fallback) ? $"Action #{actionId}" : fallback;
     }
 
-    public JobEntry? Job(uint jobId) => jobsById.GetValueOrDefault(jobId);
+    public JobEntry? Job(uint jobId) => Volatile.Read(ref snapshot)?.JobsById.GetValueOrDefault(jobId);
 
-    public string JobAbbreviation(uint jobId) => jobsById.TryGetValue(jobId, out var j) ? j.Abbreviation : "???";
+    public string JobAbbreviation(uint jobId) => Job(jobId)?.Abbreviation ?? "???";
 
-    public bool CanJobUse(ActionEntry entry, uint jobId)
+    public bool CanJobUse(ActionEntry entry, uint jobId) => CanJobUse(Volatile.Read(ref snapshot), entry, jobId);
+
+    private static bool CanJobUse(Snapshot? current, ActionEntry entry, uint jobId)
     {
         if (jobId == 0)
             return true;
         if (entry.ClassJobId == jobId)
             return true;
-        if (categoryJobs.TryGetValue(entry.CategoryId, out var jobs))
+        if (current != null && current.CategoryJobs.TryGetValue(entry.CategoryId, out var jobs))
             return jobs.Contains(jobId);
         return false;
     }
@@ -259,31 +290,36 @@ public sealed class ActionIndex
     /// </summary>
     public List<ActionEntry> SearchPlayerActions(string query, uint jobId, bool cooldownsOnly, int limit = 60)
     {
-        var source = cooldownsOnly ? playerCooldowns : playerActions;
-        return Search(source, query, jobId, limit);
+        var current = Volatile.Read(ref snapshot);
+        if (current == null)
+            return new List<ActionEntry>();
+        var source = cooldownsOnly ? current.PlayerCooldowns : current.PlayerActions;
+        return Search(current, source, query, jobId, limit);
     }
 
     /// <summary>How many of a job's actions survive the cooldown filter, for the UI to show.</summary>
-    public int CooldownCount(uint jobId) =>
-        playerCooldowns.Count(e => jobId == 0 || CanJobUse(e, jobId));
+    public int CooldownCount(uint jobId)
+    {
+        var current = Volatile.Read(ref snapshot);
+        return current?.PlayerCooldowns.Count(e => jobId == 0 || CanJobUse(current, e, jobId)) ?? 0;
+    }
 
     /// <summary>Searches every named action, which is what boss casts live in.</summary>
     public List<ActionEntry> SearchAllActions(string query, int limit = 60)
     {
-        return Search(allActions, query, 0, limit);
+        var current = Volatile.Read(ref snapshot);
+        return current == null ? new List<ActionEntry>() : Search(current, current.AllActions, query, 0, limit);
     }
 
-    private List<ActionEntry> Search(List<ActionEntry> source, string query, uint jobId, int limit)
+    private static List<ActionEntry> Search(
+        Snapshot current, IReadOnlyList<ActionEntry> source, string query, uint jobId, int limit)
     {
-        if (!Ready)
-            return new List<ActionEntry>();
-
         var q = (query ?? string.Empty).Trim().ToLowerInvariant();
         var results = new List<(int Rank, ActionEntry Entry)>();
 
         foreach (var entry in source)
         {
-            if (jobId != 0 && !CanJobUse(entry, jobId))
+            if (jobId != 0 && !CanJobUse(current, entry, jobId))
                 continue;
 
             int rank;

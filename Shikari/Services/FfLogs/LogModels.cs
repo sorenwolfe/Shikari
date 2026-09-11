@@ -37,12 +37,16 @@ public sealed class LogActor
 public sealed class LogCast
 {
     public int SourceId { get; init; }
+    /// <summary>Target actor on the begincast, or cast event when no start was observed.</summary>
+    public int? TargetId { get; init; }
     public uint AbilityId { get; init; }
     public string AbilityName { get; set; } = string.Empty;
     public float TimeSeconds { get; init; }
 
     /// <summary>Cast bar length, when the log had a begincast and a cast to pair up.</summary>
     public float CastSeconds { get; init; }
+    /// <summary>Explicit cast event time relative to fight start; never inferred from a bar duration.</summary>
+    public float? CompletionTimeSeconds { get; init; }
 
     /// <summary>A begincast was observed, including interrupted casts with no measured duration.</summary>
     public bool IsCastStart { get; init; }

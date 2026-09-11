@@ -18,6 +18,7 @@ namespace Shikari.Services
         public int Occurrence { get; set; }
         public float CombatTime { get; set; }
         public float TotalCastTime { get; set; }
+        public CastStartContext? Context { get; set; }
     }
 }
 namespace Shikari.Services.Live
@@ -83,6 +84,7 @@ namespace Shikari
     }
     public sealed class FakeEncounter
     {
+        public float CombatElapsed { get; set; }
         public bool LastPullWasWipe;
         public event Action? CombatStarted;
         public event Action? CombatEnded;
@@ -95,7 +97,7 @@ namespace Shikari
 }
 namespace Shikari.Tests
 {
-    public static class ReplayIntegration
+    public static partial class ReplayIntegration
     {
         private static void Check(bool c, string message) { if (!c) throw new Exception(message); }
         public static void Run(string directory)
@@ -114,6 +116,7 @@ namespace Shikari.Tests
                 Thread.Sleep(120);
                 Plugin.Framework.Tick();
                 Plugin.Encounter.End();
+                CompleteQueued(store);
                 Check(!store.Recording && store.Attempts.Count == 1, "End + wipe only persists one attempt");
                 var attempt = store.Attempts[0];
                 Check(attempt.Frames.Count == 2, "Framework records positions without UI");
@@ -135,27 +138,32 @@ namespace Shikari.Tests
                 var evidenceCount = plan.StrategyEvidence.Count;
                 var saveCount = Plugin.Plans.Saves;
                 Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); Plugin.ClientState.Change();
+                CompleteQueued(store);
                 Check(!store.Recording && store.Attempts.Count == 2, "Zone change closes recording");
                 Check(plan.StrategyEvidence.Count == evidenceCount && Plugin.Plans.Saves == saveCount, "Zone changes must not auto-enrich the strategy");
 
                 Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast();
                 var replacement = PlanDocument.CreateDefault(); Plugin.Plans.Active = replacement;
                 Plugin.Encounter.End();
+                CompleteQueued(store);
                 Check(plan.StrategyEvidence.Count == evidenceCount && replacement.StrategyEvidence.Count == 0 && Plugin.Plans.Saves == saveCount,
                     "Changing active strategy during a pull must prevent enrichment of either plan");
 
                 // An unconfigured cast reaches the real action-name lookup and timeline inference.
                 replacement.Slides[0].Title = "Observed cast";
                 Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); Plugin.Encounter.End();
+                CompleteQueued(store);
                 Check(replacement.StrategyEvidence.Count == 1 && replacement.Timeline.Count == 1 && replacement.Timeline[0].CastActionId == 123,
                     "Completed local pull must infer a matching untimed board from its observed cast name");
                 Check(!replacement.Timeline[0].Enabled, "Inferred local timeline instructions must stay disabled for review");
                 evidenceCount = replacement.StrategyEvidence.Count; saveCount = Plugin.Plans.Saves;
                 Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); replacement.Notes = "Edited during pull"; Plugin.Encounter.End();
+                CompleteQueued(store);
                 Check(replacement.StrategyEvidence.Count == evidenceCount && Plugin.Plans.Saves == saveCount,
                     "Editing the active strategy during a pull must reject stale automatic evidence");
                 Plugin.Plans.SaveSucceeds = false;
                 Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); Plugin.Encounter.End();
+                CompleteQueued(store);
                 Check(replacement.StrategyEvidence.Count == evidenceCount && Plugin.Plans.Saves == saveCount + 1,
                     "A failed strategy save must roll back automatic enrichment without discarding the replay");
                 Plugin.Plans.SaveSucceeds = true; saveCount = Plugin.Plans.Saves;
@@ -163,13 +171,17 @@ namespace Shikari.Tests
                 Check(replacement.StrategyEvidence.Count == evidenceCount && Plugin.Plans.Saves == saveCount,
                     "Plugin unload must save the recording without automatic strategy enrichment");
                 store.Clear();
+                WaitForStorage(store, "writes");
                 Check(store.Attempts.Count == 0, "Clear removes attempts");
             }
             Check(System.IO.Directory.GetFiles(System.IO.Path.Combine(directory, "replays"), "*.json").Length == 0, "Clear persists");
             Console.WriteLine("PASS: recording lifecycle, duplicate end, cast anchoring, persistence, reload, zone change, clear");
             Console.WriteLine("PASS: automatic completed-pull evidence, action-name inference, persistence, changed-plan rejection, save rollback and zone/unload skips");
             RunStorage(Path.Combine(directory, "storage"));
+            RunBackground(Path.Combine(directory, "background"));
         }
+
+        private static void CompleteQueued(ReplayStore store) { WaitForStorage(store, "writes"); Plugin.Framework.Tick(); }
 
         private static void WaitForStorage(ReplayStore store, string field)
         {

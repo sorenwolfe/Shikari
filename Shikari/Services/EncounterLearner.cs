@@ -319,7 +319,9 @@ public sealed class EncounterLearner : IDisposable
 
     private string PathFor(uint territory) => Path.Combine(directory, territory + ".json");
 
-    public void Dispose()
+    public void Dispose() => Dispose(saveChanges: true);
+
+    internal void Dispose(bool saveChanges)
     {
         // Unhook first. Committing the pull touches disk, and a failure there must not leave us
         // subscribed to events that will fire into an unloaded assembly.
@@ -328,7 +330,10 @@ public sealed class EncounterLearner : IDisposable
         Plugin.Encounter.CastStarted -= OnCastStarted;
         Plugin.ClientState.TerritoryChanged -= OnTerritoryChanged;
 
-        CommitPull(cleared: false);
-        SaveAll();
+        if (saveChanges)
+        {
+            CommitPull(cleared: false);
+            SaveAll();
+        }
     }
 }

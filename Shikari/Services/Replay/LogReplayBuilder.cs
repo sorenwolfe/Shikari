@@ -58,8 +58,24 @@ public static class LogReplayBuilder
             evidence.Positions.Add(new EvidencePosition { ActorId = item.ActorId, Time = item.Time, Position = new(item.X, item.Y) });
         }
         var counts = new Dictionary<uint, int>();
-        foreach (var cast in data.EnemyCasts.Where(c => c.IsCastStart || c.CastSeconds > 0).OrderBy(c => c.TimeSeconds))
+        foreach (var cast in data.EnemyCasts.OrderBy(c => c.TimeSeconds))
         {
+            var hasStart = cast.IsCastStart || cast.CastSeconds > 0;
+            // CastSeconds remains a compatibility field for existing mechanic anchoring. Only
+            // the explicit cast-event timestamp can establish an observed completion here.
+            if (attempt.Casts.Count < ReplayBuffer.MaxCasts)
+            {
+                var observation = new RecordedCast { Source = "FF Logs", ActionId = cast.AbilityId,
+                    CasterId = cast.SourceId > 0 ? (ulong)cast.SourceId : null,
+                    TargetId = cast.TargetId is > 0 ? (ulong)cast.TargetId.Value : null,
+                    ObservedTime = cast.TimeSeconds, StartTime = hasStart ? cast.TimeSeconds : null,
+                    CompletionTime = cast.CompletionTimeSeconds,
+                    Occurrence = hasStart ? counts.GetValueOrDefault(cast.AbilityId) + 1 : null };
+                if (observation.IsValid(attempt.Duration)) attempt.Casts.Add(observation);
+                else MarkPartialCasts(evidence);
+            }
+            else MarkPartialCasts(evidence);
+            if (!hasStart) continue;
             var occurrence = counts.GetValueOrDefault(cast.AbilityId) + 1;
             counts[cast.AbilityId] = occurrence;
             var entries = plan.Timeline.Where(e => e.CastActionId == cast.AbilityId &&
@@ -76,5 +92,12 @@ public static class LogReplayBuilder
         if (evidence.Statuses.Any(s => s.StatusId == 0))
             evidence.Warnings.Add("Some status IDs could not be verified against the game data; they cannot create live rules.");
         return attempt;
+    }
+
+    private static void MarkPartialCasts(ReplayEvidence evidence)
+    {
+        evidence.Complete = false;
+        const string warning = "Some log cast observations were invalid or exceeded the recording limit.";
+        if (!evidence.Warnings.Contains(warning)) evidence.Warnings.Add(warning);
     }
 }

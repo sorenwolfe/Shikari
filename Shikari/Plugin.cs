@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
@@ -62,12 +64,21 @@ public sealed class Plugin : IDalamudPlugin
     public readonly WindowSystem WindowSystem = new("Shikari");
 
     /// <summary>
-    /// Cancelled on unload so worker threads stop before the assembly goes away. Replaced in the
-    /// constructor rather than only initialised there, in case a reload reuses the load context.
+    /// The source belongs to this instance. Keeping the published token separately also makes
+    /// it safe for workers to read Shutdown after the source has been disposed.
     /// </summary>
-    private static CancellationTokenSource shutdown = new();
+    private readonly CancellationTokenSource shutdown = new();
+    private static CancellationToken shutdownToken;
 
-    internal static CancellationToken Shutdown => shutdown.Token;
+    internal static CancellationToken Shutdown => shutdownToken;
+
+    private readonly List<(Action Release, string Description)> hooks = new();
+    private readonly List<(Action Release, string Description)> resources = new();
+    private readonly List<(Action Release, string Description)> windows = new();
+    private readonly List<(Action Release, string Description)> saves = new();
+    private Task actionBuild = Task.CompletedTask;
+    private bool initialized;
+    private int disposed;
 
     /// <summary>The planner. The mini window reads which slide it is on.</summary>
     internal static MainWindow Main { get; private set; } = null!;
@@ -80,8 +91,22 @@ public sealed class Plugin : IDalamudPlugin
 
     public Plugin()
     {
-        shutdown = new CancellationTokenSource();
+        shutdownToken = shutdown.Token;
+        try
+        {
+            Initialize();
+            initialized = true;
+        }
+        catch
+        {
+            // Dalamud cannot Dispose an instance whose constructor did not return.
+            Dispose();
+            throw;
+        }
+    }
 
+    private void Initialize()
+    {
         // Before the settings are read: reading them creates the new file, and an existing new
         // file is how the migration decides it has already run.
         var broughtOver = ConfigMigration.Run(
@@ -98,34 +123,38 @@ public sealed class Plugin : IDalamudPlugin
             Config.ActiveTeamId = Config.Teams[0].Id;
 
         Actions = new ActionIndex();
-        Actions.BuildAsync(Shutdown);
+        actionBuild = Actions.BuildAsync(Shutdown);
 
         Plans = new PlanStore();
-        Backdrops = new BackdropStore();
+        var backdrops = new BackdropStore();
+        Backdrops = backdrops;
+        resources.Add((backdrops.Dispose, "dispose the backdrops"));
         Roster = new RosterResolver();
         Tracker = new ArenaTracker();
-        ArenaSpot = new ArenaOverlay();
-        Speech = new SpeechChannel(new SapiSpeechEngine());
+        ArenaSpot = Own(new ArenaOverlay(), hooks);
+        Speech = Own(new SpeechChannel(new SapiSpeechEngine()));
 
         // Order matters here: the monitor produces the events, the learner and the reminder
         // engine consume them, and the director consumes both.
-        Encounter = new EncounterMonitor();
-        Learner = new EncounterLearner();
-        Reminders = new ReminderEngine();
-        Director = new SlideDirector();
-        Adaptive = new AdaptiveService();
-        FfLogs = new FfLogsClient();
+        Encounter = Own(new EncounterMonitor());
+        var learner = new EncounterLearner();
+        Learner = learner;
+        resources.Add((() => learner.Dispose(initialized), "dispose the learner"));
+        Reminders = Own(new ReminderEngine());
+        Director = Own(new SlideDirector());
+        Adaptive = Own(new AdaptiveService());
+        FfLogs = Own(new FfLogsClient());
         FfLogsAuth = new FfLogsAuth();
-        PlanFetcher = new PlanFetcher();
+        PlanFetcher = Own(new PlanFetcher());
         FfLogsAuth.Forget(Config.FfLogsClientId, Config.FfLogsClientSecret);
-        Fonts = new ThemeFonts();
+        Fonts = Own(new ThemeFonts());
 
-        mainWindow = new MainWindow();
+        mainWindow = Own(new MainWindow(), windows);
         Main = mainWindow;
 
-        configWindow = new ConfigWindow();
-        overlayWindow = new OverlayWindow();
-        miniWindow = new MiniPlanWindow();
+        configWindow = Own(new ConfigWindow(), windows);
+        overlayWindow = Own(new OverlayWindow(), windows);
+        miniWindow = Own(new MiniPlanWindow(), windows);
 
         WindowSystem.AddWindow(mainWindow);
         WindowSystem.AddWindow(configWindow);
@@ -134,14 +163,21 @@ public sealed class Plugin : IDalamudPlugin
 
         overlayWindow.IsOpen = true;
 
-        Director.SlideRequested += mainWindow.OnDirectedSlide;
-        Director.ResetRequested += mainWindow.OnDirectedReset;
-        Replays = new ReplayStore();
-        Buddy = new BuddyService();
-        buddyWindow = new BuddyWindow { IsOpen = true };
+        var director = Director;
+        director.SlideRequested += mainWindow.OnDirectedSlide;
+        hooks.Add((() => director.SlideRequested -= mainWindow.OnDirectedSlide, "detach the slide director"));
+        director.ResetRequested += mainWindow.OnDirectedReset;
+        hooks.Add((() => director.ResetRequested -= mainWindow.OnDirectedReset, "detach the slide reset"));
+        var replays = new ReplayStore();
+        Replays = replays;
+        resources.Add((() => replays.Dispose(initialized), "dispose the replay store"));
+        Buddy = Own(new BuddyService());
+        buddyWindow = Own(new BuddyWindow(), windows);
+        buddyWindow.IsOpen = true;
         WindowSystem.AddWindow(buddyWindow);
 
-        CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
+        var commands = CommandManager;
+        if (commands.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
             HelpMessage =
                 "Open the raid strategy planner.\n" +
@@ -153,18 +189,33 @@ public sealed class Plugin : IDalamudPlugin
                 "        /shikari follow  →  toggle slides following the fight\n" +
                 "        /shikari mini    →  toggle the small in-fight window\n" +
                 "        /shikari reset   →  jump back to the first slide",
-        });
+        }))
+            hooks.Add((() => commands.RemoveHandler(CommandName), "remove " + CommandName));
 
-        CommandManager.AddHandler(CommandAlias, new CommandInfo(OnCommand)
+        if (commands.AddHandler(CommandAlias, new CommandInfo(OnCommand)
         {
             HelpMessage = "Shorthand for /shikari.",
-        });
+        }))
+            hooks.Add((() => commands.RemoveHandler(CommandAlias), "remove " + CommandAlias));
 
-        PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
-        PluginInterface.UiBuilder.OpenConfigUi += ToggleConfig;
-        PluginInterface.UiBuilder.OpenMainUi += ToggleMain;
-        DutyState.DutyStarted += OnDutyStarted;
-        DutyState.DutyCompleted += OnDutyCompleted;
+        var ui = PluginInterface.UiBuilder;
+        ui.Draw += WindowSystem.Draw;
+        hooks.Add((() => ui.Draw -= WindowSystem.Draw, "detach the draw hook"));
+        ui.OpenConfigUi += ToggleConfig;
+        hooks.Add((() => ui.OpenConfigUi -= ToggleConfig, "detach the config button"));
+        ui.OpenMainUi += ToggleMain;
+        hooks.Add((() => ui.OpenMainUi -= ToggleMain, "detach the main button"));
+        var duty = DutyState;
+        duty.DutyStarted += OnDutyStarted;
+        hooks.Add((() => duty.DutyStarted -= OnDutyStarted, "detach duty start"));
+        duty.DutyCompleted += OnDutyCompleted;
+        hooks.Add((() => duty.DutyCompleted -= OnDutyCompleted, "detach duty completion"));
+
+        var plans = Plans;
+        var pluginInterface = PluginInterface;
+        var config = Config;
+        saves.Add((plans.SaveAll, "save the plans"));
+        saves.Add((() => pluginInterface.SavePluginConfig(config), "save the settings"));
 
         Log.Information("Shikari loaded.");
     }
@@ -273,61 +324,61 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Shikari could not {What} while unloading.", what);
+            // Diagnostics are best effort too: a logger failure must not strand later hooks.
+            try { Log?.Error(ex, "Shikari could not {What} while unloading.", what); }
+            catch { }
         }
+    }
+
+    private T Own<T>(T resource, List<(Action Release, string Description)>? releases = null)
+        where T : IDisposable
+    {
+        // Capture only successfully acquired instances, never a mutable static service slot.
+        (releases ?? resources).Add((resource.Dispose, "dispose " + typeof(T).Name));
+        return resource;
+    }
+
+    private static void ReleaseAll(List<(Action Release, string Description)> releases)
+    {
+        for (var i = releases.Count - 1; i >= 0; --i)
+            Safely(releases[i].Release, releases[i].Description);
+        releases.Clear();
     }
 
     public void Dispose()
     {
-        // Nothing running in the background should still be touching us by the time the rest of
-        // this method starts pulling things apart.
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+            return;
+
         Safely(shutdown.Cancel, "stop background work");
+        ReleaseAll(hooks);
+        Safely(WindowSystem.RemoveAllWindows, "remove the windows");
 
-        // Detach from the game before anything else. Everything below is ours and can be leaked
-        // without consequence; these five are Dalamud's and must come off no matter what.
-        Safely(() => CommandManager.RemoveHandler(CommandName), "remove " + CommandName);
-        Safely(() => CommandManager.RemoveHandler(CommandAlias), "remove " + CommandAlias);
-        Safely(() => ArenaSpot?.Dispose(), "detach the arena spot");
-        Safely(() => PluginInterface.UiBuilder.Draw -= WindowSystem.Draw, "detach the draw hook");
-        Safely(() => PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfig, "detach the config button");
-        Safely(() => PluginInterface.UiBuilder.OpenMainUi -= ToggleMain, "detach the main button");
-        Safely(() => DutyState.DutyStarted -= OnDutyStarted, "detach duty start");
-        Safely(() => DutyState.DutyCompleted -= OnDutyCompleted, "detach duty completion");
+        // The index owns its unpublished build data. Allow cancellation to finish without
+        // holding the game thread indefinitely if a sheet provider stops responding.
+        Safely(() => actionBuild.Wait(TimeSpan.FromSeconds(1)), "wait for the action index");
 
-        Safely(() => Director.SlideRequested -= mainWindow.OnDirectedSlide, "detach the slide director");
-        Safely(() => Director.ResetRequested -= mainWindow.OnDirectedReset, "detach the slide reset");
-
-        Safely(() => Buddy?.Dispose(), "stop the raid buddy");
-        Safely(Director.Dispose, "shut down the slide director");
-        Safely(() => Replays?.Dispose(), "finish mechanic recording");
-        Safely(() => Adaptive?.Dispose(), "stop adaptive mechanics");
-        Safely(Reminders.Dispose, "shut down the reminder engine");
-
-        // Before the windows, so a line still being spoken is cut off rather than left talking
-        // over a game the plugin has already let go of.
-        Safely(Speech.Dispose, "shut down speech");
-
-        Safely(Learner.Dispose, "shut down the learner");
-        Safely(Encounter.Dispose, "shut down the encounter monitor");
-        Safely(FfLogs.Dispose, "close the FF Logs client");
-        Safely(PlanFetcher.Dispose, "close the plan fetcher");
-        Safely(Backdrops.Dispose, "drop the backdrop textures");
-        Safely(Fonts.Dispose, "release the font handles");
+        ReleaseAll(resources);
+        ReleaseAll(windows);
         Safely(Sprites.Forget, "drop the sprite handles");
         Safely(EmojiArtwork.Forget, "drop the emoji handles");
 
-        Safely(WindowSystem.RemoveAllWindows, "remove the windows");
-        Safely(mainWindow.Dispose, "dispose the planner window");
-        Safely(configWindow.Dispose, "dispose the settings window");
-        Safely(overlayWindow.Dispose, "dispose the overlay");
-        Safely(miniWindow.Dispose, "dispose the mini plan");
-        Safely(() => buddyWindow?.Dispose(), "dispose the raid buddy window");
+        // Failed startup must not overwrite settings or plans with incompletely loaded state.
+        if (initialized)
+            foreach (var save in saves)
+                Safely(save.Release, save.Description);
+        saves.Clear();
 
-        // Saving comes last. A disk error here used to abandon the rest of the teardown.
-        Safely(Plans.SaveAll, "save the plans");
-        Safely(Learner.SaveAll, "save the learned timings");
-        Safely(() => PluginInterface.SavePluginConfig(Config), "save the settings");
-
-        Safely(shutdown.Dispose, "dispose the shutdown token");
+        if (actionBuild.IsCompleted)
+        {
+            _ = actionBuild.Exception;
+            Safely(shutdown.Dispose, "dispose the shutdown token");
+        }
+        else
+            _ = actionBuild.ContinueWith(completed =>
+            {
+                _ = completed.Exception;
+                Safely(shutdown.Dispose, "dispose the shutdown token");
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 }

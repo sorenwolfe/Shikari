@@ -5,6 +5,7 @@ using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using Shikari.Services.Replay;
 
 namespace Shikari.Services;
 
@@ -27,7 +28,10 @@ public sealed class CastEvent
 
     public DateTime StartedAtUtc { get; init; }
 
-    /// <summary>Wall-clock moment the cast is expected to resolve.</summary>
+    /// <summary>Actor geometry at first detection, which can be later than the reconstructed bar start.</summary>
+    public CastStartContext? Context { get; init; }
+
+    /// <summary>Expected end of the display bar, not an observed completion or effect.</summary>
     public DateTime ResolvesAtUtc => StartedAtUtc.AddSeconds(TotalCastTime);
 }
 
@@ -241,8 +245,9 @@ public sealed class EncounterMonitor : IDisposable
                 CasterEntityId = entityId,
                 Occurrence = occurrence,
                 TotalCastTime = chara.TotalCastTime,
-                CombatTime = Math.Max(0f, CombatElapsed - elapsed),
+                CombatTime = Math.Max(0f, (float)(now - combatStartUtc).TotalSeconds - elapsed),
                 StartedAtUtc = now.AddSeconds(-elapsed),
+                Context = CaptureContext(chara, now, elapsed),
             };
 
             pullCasters.Add(entityId);
@@ -264,6 +269,30 @@ public sealed class EncounterMonitor : IDisposable
         {
             foreach (var stale in tracked.Keys.Where(k => !seen.Contains(k)).ToList())
                 tracked.Remove(stale);
+        }
+    }
+
+    private CastStartContext? CaptureContext(IBattleChara caster, DateTime now, float elapsed)
+    {
+        try
+        {
+            var targetId = caster.CastTargetObjectId;
+            var hasTarget = targetId is not (0 or 0xE0000000 or ulong.MaxValue);
+            var target = hasTarget ? Plugin.ObjectTable.SearchById(targetId) : null;
+            return new CastStartContext
+            {
+                ObservedTime = Math.Max(0f, (float)(now - combatStartUtc).TotalSeconds),
+                ObservedAtUtc = now, StartedAtUtc = now.AddSeconds(-elapsed),
+                CasterId = caster.GameObjectId, TargetId = hasTarget ? targetId : null,
+                CasterWorldPosition = caster.Position, CasterHeading = caster.Rotation,
+                TargetWorldPosition = target?.Position, TargetHeading = target?.Rotation,
+            };
+        }
+        catch (Exception ex)
+        {
+            // Optional context must not prevent the existing cast reminder from firing.
+            Plugin.Log.Warning(ex, "Cast actor context was unavailable.");
+            return null;
         }
     }
 

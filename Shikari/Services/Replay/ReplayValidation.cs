@@ -11,7 +11,8 @@ public static class ReplayValidation
         if (attempt.Version is not (1 or 2) || !Guid.TryParseExact(attempt.Id, "N", out _) ||
             !float.IsFinite(attempt.Duration) || attempt.Duration < 0 || attempt.Duration > ReplayBuffer.MaxDuration ||
             attempt.Plan?.Slides == null || attempt.Plan.Roster == null || attempt.Plan.Timeline == null ||
-            attempt.Plan.Arena == null || attempt.Frames == null || attempt.Mechanics == null ||
+            attempt.Plan.Arena == null || attempt.Frames == null || attempt.Mechanics == null || attempt.Casts == null ||
+            attempt.Casts.Count > ReplayBuffer.MaxCasts || attempt.Casts.Any(c => c == null || !c.IsValid(attempt.Duration)) ||
             attempt.Frames.Count > ReplayBuffer.MaxFrames || attempt.Mechanics.Count > ReplayBuffer.MaxMechanics ||
             attempt.Plan.Slides.Any(s => s == null || s.Items == null || s.Items.Any(i => i == null || i.Points == null)) ||
             attempt.Plan.Roster.Any(r => r == null) || attempt.Plan.Timeline.Any(e => e == null)) return false;

@@ -278,6 +278,7 @@ public sealed class FfLogsClient : IDisposable
                 var type = row.Value<string>("type") ?? string.Empty;
                 var abilityId = row.Value<uint?>("abilityGameID") ?? 0;
                 var source = row.Value<int?>("sourceID") ?? 0;
+                var target = LogEvidenceParser.Integer(row["targetID"], 1, int.MaxValue);
                 var timestamp = row.Value<long?>("timestamp") ?? 0;
 
                 if (abilityId == 0)
@@ -292,6 +293,7 @@ public sealed class FfLogsClient : IDisposable
                     results.Add(new LogCast
                     {
                         SourceId = source,
+                        TargetId = (int?)target,
                         AbilityId = abilityId,
                         TimeSeconds = relative,
                         IsCastStart = true,
@@ -315,9 +317,11 @@ public sealed class FfLogsClient : IDisposable
                         results[index] = new LogCast
                         {
                             SourceId = source,
+                            TargetId = match.TargetId,
                             AbilityId = abilityId,
                             TimeSeconds = began,
                             CastSeconds = MathF.Max(0f, relative - began),
+                            CompletionTimeSeconds = relative,
                             IsCastStart = true,
                             FromEnemy = match.FromEnemy,
                         };
@@ -331,8 +335,10 @@ public sealed class FfLogsClient : IDisposable
                 results.Add(new LogCast
                 {
                     SourceId = source,
+                    TargetId = (int?)target,
                     AbilityId = abilityId,
                     TimeSeconds = relative,
+                    CompletionTimeSeconds = relative,
                     FromEnemy = hostility == "Enemies",
                 });
             }

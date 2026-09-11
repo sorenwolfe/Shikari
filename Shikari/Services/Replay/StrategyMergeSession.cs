@@ -9,6 +9,16 @@ namespace Shikari.Services.Replay;
 /// <summary>A source request owns a snapshot; late results cannot edit a different or changed strategy.</summary>
 public sealed class StrategyMergeSession
 {
+    /// <summary>Detached worker result. Only its originating session can commit it.</summary>
+    public sealed class Prepared
+    {
+        internal StrategyMergeSession Owner { get; }
+        internal PlanDocument Plan { get; }
+        public StrategyEnrichmentResult Result { get; }
+        internal Prepared(StrategyMergeSession owner, PlanDocument plan, StrategyEnrichmentResult result)
+        { Owner = owner; Plan = plan; Result = result; }
+    }
+
     public PlanDocument Snapshot { get; }
     private readonly string fingerprint;
     public StrategyMergeSession(PlanDocument plan)
@@ -21,11 +31,25 @@ public sealed class StrategyMergeSession
 
     public StrategyEnrichmentResult Apply(PlanDocument plan, ReplayAttempt attempt, Func<bool> save)
     {
-        if (!Matches(plan)) return new(false, false, 0, 0, 0,
-            "The strategy changed while this reference was loading. Import it again against the current plan.");
-        var staged = JsonConvert.DeserializeObject<PlanDocument>(JsonConvert.SerializeObject(plan))!;
+        if (!Matches(plan)) return Stale();
+        return Commit(plan, Prepare(attempt), save);
+    }
+
+    /// <summary>Uses only captured data; safe on a worker with exclusive ownership of the recording.</summary>
+    public Prepared Prepare(ReplayAttempt attempt)
+    {
+        var staged = JsonConvert.DeserializeObject<PlanDocument>(JsonConvert.SerializeObject(Snapshot))!;
         var result = StrategyEnrichment.Apply(staged, attempt);
+        return new Prepared(this, staged, result);
+    }
+
+    /// <summary>Runs on the framework thread. A failed durable save restores the original fields.</summary>
+    public StrategyEnrichmentResult Commit(PlanDocument plan, Prepared prepared, Func<bool> save)
+    {
+        if (prepared.Owner != this || !Matches(plan)) return Stale();
+        var result = prepared.Result;
         if (!result.Accepted || !result.Changed) return result;
+        var staged = prepared.Plan;
         var timeline = plan.Timeline; var rules = plan.AdaptiveMechanics; var evidence = plan.StrategyEvidence;
         plan.Timeline = staged.Timeline; plan.AdaptiveMechanics = staged.AdaptiveMechanics; plan.StrategyEvidence = staged.StrategyEvidence;
         try
@@ -39,6 +63,9 @@ public sealed class StrategyMergeSession
         }
         return result;
     }
+
+    private static StrategyEnrichmentResult Stale() => new(false, false, 0, 0, 0,
+        "The strategy changed while this reference was processing. Import it again against the current plan.");
 
     public static void LinkReplay(PlanDocument plan, ReplayAttempt attempt)
     {
