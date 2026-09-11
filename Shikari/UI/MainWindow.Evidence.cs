@@ -136,6 +136,8 @@ public sealed partial class MainWindow
         if (evidence.Actors.Count == 0) return;
         if (!ImGui.CollapsingHeader($"Statuses & strategy / {evidence.Source}##evidence")) return;
         if (!evidence.Complete) ImGui.TextColored(Palette.Vec(Palette.Attention), "Incomplete reference — rule drafting is unavailable.");
+        var anchor = SelectedReviewMechanic(attempt);
+        DrawCastEvidenceContext(attempt, anchor);
         ImGui.SetNextItemWidth(260 * UiHelpers.Scale);
         if (ImGui.BeginCombo("Player##evidence", evidence.Actors.FirstOrDefault(a => a.Id == evidenceActor)?.Name ?? "Choose player"))
         {
@@ -166,6 +168,12 @@ public sealed partial class MainWindow
             }
         }
         var active = timeline.StatusesAt(evidenceActor, reviewTime);
+        var assignment = EncounterAssignmentDecoder.Decode(attempt, anchor, evidenceActor, reviewTime, active);
+        if (assignment != null)
+        {
+            ImGui.TextColored(Palette.Vec(assignment.IsResolved ? Palette.Good : Palette.Attention), assignment.Label);
+            ImGui.TextWrapped(assignment.Reason);
+        }
         ImGui.TextDisabled($"{active.Count} active statuses at {reviewTime:0.1}s. Select up to four assignment statuses.");
         if (ImGui.BeginChild("##evidence-status-list", new Vector2(0, 125 * UiHelpers.Scale), true, ImGuiWindowFlags.None))
         {
@@ -184,7 +192,6 @@ public sealed partial class MainWindow
             }
         }
         ImGui.EndChild();
-        var anchor = SelectedReviewMechanic(attempt);
         if (anchor != null)
         {
             ImGui.TextWrapped($"Cast anchor: {anchor.Label} / #{anchor.ActionId}, occurrence {anchor.Occurrence}");

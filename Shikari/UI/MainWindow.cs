@@ -7,6 +7,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Windowing;
 using Shikari.Model;
 using Shikari.Services;
+using Shikari.Services.Storage;
 using Shikari.UI.Theme;
 
 namespace Shikari.UI;
@@ -21,8 +22,8 @@ public sealed partial class MainWindow : Window, IDisposable
     /// <summary>Slide the planner is on. The mini window mirrors this so the two never disagree.</summary>
     public int SlideIndex => slideIndex;
 
-    private bool dirty;
-    private DateTime lastSaveUtc = DateTime.UtcNow;
+    private readonly EditorAutosave autosave = new();
+    private bool dirty => autosave.IsDirty(Plan);
 
     private SlideChangeReason lastAutoChange;
     private DateTime lastAutoChangeUtc = DateTime.MinValue;
@@ -152,37 +153,25 @@ public sealed partial class MainWindow : Window, IDisposable
             Plugin.Director.NotifyManualChange();
     }
 
-    private void MarkDirty() { dirty = true; editOccurred = true; InvalidateAssignmentCoverage(); }
+    private void MarkDirty()
+    {
+        if (Plan != null) autosave.MarkDirty(Plan);
+        editOccurred = true;
+        InvalidateAssignmentCoverage();
+    }
 
     public override void Update()
     {
         AdvanceAssignmentCheck(Plan);
-        // Autosave a couple of seconds after the last edit so a crash never costs much.
-        if (!dirty)
-            return;
-
-        if ((DateTime.UtcNow - lastSaveUtc).TotalSeconds < 2)
-            return;
-
-        lastSaveUtc = DateTime.UtcNow;
-        if (Plugin.Plans.SaveActive())
-        {
+        Plugin.Plans.Poll();
+        if (autosave.Update(Plan, DateTime.UtcNow, Plugin.Plans.RequestSave))
             Plugin.SaveConfig();
-            dirty = false;
-        }
     }
 
     public override void OnClose()
     {
         CancelAssignmentCheck();
-        if (!dirty)
-            return;
-
-        if (Plugin.Plans.SaveActive())
-        {
-            Plugin.SaveConfig();
-            dirty = false;
-        }
+        if (dirty && Plan != null) autosave.RequestNow(Plan, DateTime.UtcNow, Plugin.Plans.RequestSave);
     }
 
     public override void Draw()

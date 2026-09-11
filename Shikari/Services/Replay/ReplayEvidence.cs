@@ -26,7 +26,10 @@ public sealed class ReplayEvidence
 
 public sealed class EvidenceActor
 {
+    /// <summary>Local entity ID for statuses/positions, or an actor ID scoped to this FF Logs report.</summary>
     public long Id { get; set; }
+    /// <summary>Explicit local game object ID observed with Id. Missing or conflicting identity stays unknown.</summary>
+    public ulong? GameObjectId { get; set; }
     public string Name { get; set; } = "";
     public uint JobId { get; set; }
     public string Job { get; set; } = "";

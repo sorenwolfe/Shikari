@@ -3,12 +3,48 @@ using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shikari.Model;
+using Shikari.Services.Storage;
 
 namespace Shikari.Services.Replay;
 
 /// <summary>A source request owns a snapshot; late results cannot edit a different or changed strategy.</summary>
 public sealed class StrategyMergeSession
 {
+    /// <summary>A framework-owned proposal whose disk acknowledgment may arrive after more edits.</summary>
+    public sealed class PendingCommit
+    {
+        private readonly PlanDocument? plan;
+        private readonly string fingerprint;
+        private readonly Action? rollback;
+        private StrategyEnrichmentResult result;
+        private bool finished;
+        public PlanSaveTicket? Ticket { get; }
+        public StrategyEnrichmentResult Result => result;
+        internal PendingCommit(StrategyEnrichmentResult result, PlanSaveTicket? ticket = null,
+            PlanDocument? plan = null, string fingerprint = "", Action? rollback = null)
+        { this.result = result; Ticket = ticket; this.plan = plan; this.fingerprint = fingerprint; this.rollback = rollback; }
+
+        public bool TryComplete(bool allowRollback, out StrategyEnrichmentResult completed)
+        {
+            completed = result;
+            if (finished || Ticket == null) return true;
+            if (!Ticket.Completion.IsCompleted) return false;
+            finished = true;
+            var saved = Ticket.Completion.GetAwaiter().GetResult();
+            if (saved.Outcome == PlanSaveOutcome.Superseded)
+                result = result with { Summary = "A newer plan operation replaced this save request." };
+            else if (saved.Outcome == PlanSaveOutcome.Failed)
+            {
+                var restore = allowRollback && plan != null && Fingerprint(plan) == fingerprint;
+                if (restore) rollback?.Invoke();
+                result = result with { Accepted = !restore, Changed = !restore,
+                    Summary = restore ? "The strategy update could not be saved; its previous state was restored."
+                        : "The strategy update could not be saved. Newer changes were kept; retry saving from the plan header." };
+            }
+            completed = result;
+            return true;
+        }
+    }
     /// <summary>Detached worker result. Only its originating session can commit it.</summary>
     public sealed class Prepared
     {
@@ -62,6 +98,24 @@ public sealed class StrategyMergeSession
             throw;
         }
         return result;
+    }
+
+    public PendingCommit CommitAsync(PlanDocument plan, Prepared prepared, Func<PlanDocument, PlanSaveTicket> save)
+    {
+        if (prepared.Owner != this || !Matches(plan)) return new PendingCommit(Stale());
+        var result = prepared.Result;
+        if (!result.Accepted || !result.Changed) return new PendingCommit(result);
+        var timeline = plan.Timeline; var rules = plan.AdaptiveMechanics; var evidence = plan.StrategyEvidence;
+        void Restore() { plan.Timeline = timeline; plan.AdaptiveMechanics = rules; plan.StrategyEvidence = evidence; }
+        plan.Timeline = prepared.Plan.Timeline;
+        plan.AdaptiveMechanics = prepared.Plan.AdaptiveMechanics;
+        plan.StrategyEvidence = prepared.Plan.StrategyEvidence;
+        try
+        {
+            var applied = Fingerprint(plan);
+            return new PendingCommit(result, save(plan), plan, applied, Restore);
+        }
+        catch { Restore(); throw; }
     }
 
     private static StrategyEnrichmentResult Stale() => new(false, false, 0, 0, 0,

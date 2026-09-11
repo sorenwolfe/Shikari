@@ -25,7 +25,9 @@ public static class ReplayValidation
             evidence.References == null || evidence.Warnings == null || evidence.Actors.Count > 32 ||
             evidence.Statuses.Count > ReplayEvidence.MaxStatuses || evidence.Positions.Count > ReplayEvidence.MaxPositions ||
             evidence.References.Count > 8 || evidence.Warnings.Count > 100 ||
-            evidence.Actors.Any(a => a == null || a.Id <= 0 || a.Name == null || a.Name.Length > 256 || a.SlotIndex < -1 || a.SlotIndex >= attempt.Plan.Roster.Count) ||
+            evidence.Actors.Any(a => a == null || a.Id <= 0 || a.Name == null || a.Name.Length > 256 || a.SlotIndex < -1 || a.SlotIndex >= attempt.Plan.Roster.Count ||
+                a.GameObjectId != null && (evidence.Source != "Local recording" || !EvidenceActorIdentity.IsLiveEntityId(a.Id) ||
+                    !EvidenceActorIdentity.IsLiveGameObjectId(a.GameObjectId))) ||
             evidence.Actors.Select(a => a.Id).Distinct().Count() != evidence.Actors.Count ||
             evidence.Statuses.Any(s => s == null || !float.IsFinite(s.Time) || s.Time < 0 || s.Time > attempt.Duration ||
                 s.ActorId <= 0 || s.Duration is { } duration && (!float.IsFinite(duration) || duration < 0 || duration > 86400) ||

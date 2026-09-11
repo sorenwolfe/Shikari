@@ -77,6 +77,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly List<(Action Release, string Description)> windows = new();
     private readonly List<(Action Release, string Description)> saves = new();
     private Task actionBuild = Task.CompletedTask;
+    private PlanStore? planStore;
     private bool initialized;
     private int disposed;
 
@@ -125,7 +126,7 @@ public sealed class Plugin : IDalamudPlugin
         Actions = new ActionIndex();
         actionBuild = Actions.BuildAsync(Shutdown);
 
-        Plans = new PlanStore();
+        Plans = planStore = new PlanStore();
         var backdrops = new BackdropStore();
         Backdrops = backdrops;
         resources.Add((backdrops.Dispose, "dispose the backdrops"));
@@ -211,10 +212,8 @@ public sealed class Plugin : IDalamudPlugin
         duty.DutyCompleted += OnDutyCompleted;
         hooks.Add((() => duty.DutyCompleted -= OnDutyCompleted, "detach duty completion"));
 
-        var plans = Plans;
         var pluginInterface = PluginInterface;
         var config = Config;
-        saves.Add((plans.SaveAll, "save the plans"));
         saves.Add((() => pluginInterface.SavePluginConfig(config), "save the settings"));
 
         Log.Information("Shikari loaded.");
@@ -362,6 +361,31 @@ public sealed class Plugin : IDalamudPlugin
         ReleaseAll(windows);
         Safely(Sprites.Forget, "drop the sprite handles");
         Safely(EmojiArtwork.Forget, "drop the emoji handles");
+
+        // Keep the queue alive until windows and recording services have finished changing
+        // plans. Final snapshots join its ordered worker; Dispose bounds the drain instead
+        // of waiting indefinitely on synchronous SaveAll behind a stalled disk write.
+        if (planStore is { } plans)
+        {
+            Safely(() =>
+            {
+                try
+                {
+                    if (initialized)
+                        foreach (var plan in plans.All)
+                            plans.RequestSave(plan);
+                }
+                finally
+                {
+                    // Constructor rollback still owns the queue, but must not save its
+                    // incompletely initialized library.
+                    plans.Dispose();
+                }
+                if (plans.LastSaveError is { } error)
+                    Log.Warning("Shikari plan storage closed with unsaved changes: {Error}", error);
+            }, "close plan storage");
+            planStore = null;
+        }
 
         // Failed startup must not overwrite settings or plans with incompletely loaded state.
         if (initialized)

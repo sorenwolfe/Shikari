@@ -54,9 +54,15 @@ public sealed partial class MainWindow
         if (ImGui.SmallButton("Redo edit")) RestoreEdit(plan, redoEdits, undoEdits);
         ImGui.EndDisabled();
         ImGui.SameLine();
-        ImGui.TextDisabled(dirty ? "Changes pending save" : "Saved locally");
-        if (!string.IsNullOrEmpty(Plugin.Plans.LastSaveError))
-            ImGui.TextWrapped("Save needs attention: " + Plugin.Plans.LastSaveError);
+        var saveState = Plugin.Plans.GetSaveState(plan.Id);
+        ImGui.TextDisabled(saveState.Error != null ? "Save needs attention" : saveState.IsSaving ? "Saving changes…" :
+            dirty ? "Changes pending save" : "Saved locally");
+        if (saveState.Error != null)
+        {
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Retry save")) autosave.RequestNow(plan, DateTime.UtcNow, Plugin.Plans.RequestSave);
+            ImGui.TextWrapped(saveState.Error);
+        }
         ImGui.Separator();
         DrawMechanicContext(plan);
         if (ImGui.BeginChild("##workspace-content", Vector2.Zero, false, ImGuiWindowFlags.None))
@@ -187,7 +193,7 @@ public sealed partial class MainWindow
         plan.AdaptiveMechanics = restored.AdaptiveMechanics;
         plan.StrategyEvidence = restored.StrategyEvidence;
         plan.FormatVersion = restored.FormatVersion;
-        canvas.Select(null); dirty = true; pendingBefore = null;
+        canvas.Select(null); MarkDirty(); pendingBefore = null;
         frameBefore = JsonConvert.SerializeObject(plan);
     }
 

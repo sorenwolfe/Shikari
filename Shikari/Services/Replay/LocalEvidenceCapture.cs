@@ -22,13 +22,18 @@ public sealed class LocalEvidenceCapture
         foreach (var actor in members.Take(8))
         {
             var id = (long)actor.EntityId;
-            if (!seen.Add(id)) continue;
+            if (!EvidenceActorIdentity.IsLiveEntityId(id)) continue;
             var entry = evidence.Actors.FirstOrDefault(p => p.Id == id);
+            var gameObjectId = EvidenceActorIdentity.IsLiveGameObjectId(actor.GameObjectId) ? actor.GameObjectId : (ulong?)null;
+            // An entity observed with conflicting identities cannot safely link any of its
+            // historical statuses. Once unknown, do not fill it from a later observation.
+            if (entry != null && entry.GameObjectId != gameObjectId) entry.GameObjectId = null;
+            if (!seen.Add(id)) continue;
             if (entry == null)
             {
                 if (evidence.Actors.Count >= 32) continue;
                 var isLocal = actor.EntityId == local?.EntityId;
-                entry = new EvidenceActor { Id = id, Name = actor.Name.TextValue, JobId = actor.ClassJob.RowId,
+                entry = new EvidenceActor { Id = id, GameObjectId = gameObjectId, Name = actor.Name.TextValue, JobId = actor.ClassJob.RowId,
                     IsLocal = isLocal, SlotIndex = RosterResolver.MatchSeat(attempt.Plan.Roster, actor.Name.TextValue,
                         actor.ClassJob.RowId, isLocal ? attempt.LocalSlot : -1) };
                 evidence.Actors.Add(entry);

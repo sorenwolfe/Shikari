@@ -31,6 +31,8 @@ Type `/shikari` to get started. Future updates appear in the plugin installer.
 
 You can also build slides from observed mechanics in **Learned** after a few pulls. If you're drawing by hand, scroll over the board to zoom and hold the middle mouse button to pan.
 
+Edits save automatically in the background. The plan header shows when a save is pending or in progress. If saving fails, it keeps your changes and offers **Retry save**.
+
 ## Commands
 
 | Command | What it does |
@@ -108,6 +110,10 @@ A rule can require up to four statuses at once, with optional duration and param
 ## Look back after a pull
 
 Open **Review** or use `/shikari review`. Pick an attempt and a mechanic, then play or scrub through the recorded positions over your plan. You can compare attempts to see what changed.
+
+Expand **Statuses & strategy** to inspect a player's buffs and debuffs. When a recorded cast identifies its target, **Inspect cast target** selects that player and pauses at the observation time. Older recordings may not contain this identity information.
+
+For Grotesquerie: Act 2, Review can label the selected player's number and Bonds A/B when both statuses were recorded after the selected cast. Missing or conflicting evidence stays unresolved. This is an assignment label for reviewing the pull; movement guidance still comes from your reviewed plan and Adaptive rules.
 
 Recording and saved-attempt controls are under **Review → Recording & storage**. Full recordings stay on your computer. Shared plans include compact attached observations, report/fight references, and anonymous player or seat identifiers; they don't include the recording's character names or full movement history. Plans using these references or separate board arenas require this updated client.
 

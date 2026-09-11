@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 $files = @(Get-ChildItem "$root/Shikari/Model/*.cs" | ForEach-Object FullName)
 $files += @('Services/PlanJson.cs','Services/PlanNormaliser.cs','Services/ShareCode.cs','Services/PlanStore.cs','Services/Storage/AtomicFile.cs','Services/RosterResolver.cs','Services/Live/ArenaTracker.cs','Services/Live/WorldAlignment.cs') | ForEach-Object { Join-Path $root "Shikari/$_" }
+$files += @('Services/Storage/PlanPersistenceQueue.cs','Services/Storage/PlanSnapshot.cs') | ForEach-Object { Join-Path $root "Shikari/$_" }
 $files += Join-Path $PSScriptRoot 'ReliabilityStubs.cs'
 $refs = @(Get-ChildItem "$PSHOME/ref/*.dll" | ForEach-Object FullName) + "$PSHOME/Newtonsoft.Json.dll"
 Add-Type -Path $files -ReferencedAssemblies $refs -CompilerOptions '/nullable:enable','/nowarn:1701'

@@ -61,6 +61,9 @@ public static class PluginLifecycleTests
             Released(host, failure);
             Check(host.Commands.Count == 0, failure + ": owned command survived rollback");
             Check(Probe.Saves.Count == 0, failure + ": rollback persisted incomplete state");
+            if (Probe.Resources.Any(resource => resource is Services.PlanStore))
+                Check(Probe.PlanEvents.SequenceEqual(new[] { "dispose" }),
+                    failure + ": failed startup must close plan storage without requesting a final save");
             if (Probe.BuildToken.HasValue)
                 Check(Probe.BuildToken.Value.IsCancellationRequested, failure + ": action build was not cancelled");
         }
@@ -78,6 +81,21 @@ public static class PluginLifecycleTests
             Check(host.Commands.Count == 1 && ReferenceEquals(host.Commands[collision], foreign),
                 "A failed " + collision + " acquisition must preserve the existing handler");
             Check(Probe.Saves.SequenceEqual(new[] { "replay", "learner", "plans", "config" }), "Normal unload should save once");
+            Check(Probe.PlanEvents.SequenceEqual(new[] { "request", "dispose" }),
+                "Final plan snapshots must be queued before the storage queue closes");
+        }
+
+        // A final snapshot failure cannot leak the storage worker or prevent settings saving.
+        {
+            var host = Setup();
+            var plugin = new Plugin();
+            Probe.ThrowOnPlanRequest = true;
+            plugin.Dispose();
+            Released(host, "failed final plan request");
+            Check(Probe.PlanEvents.SequenceEqual(new[] { "request", "dispose" }),
+                "Plan storage must close even when its final snapshot request throws");
+            Check(Probe.Saves.SequenceEqual(new[] { "replay", "learner", "plans", "config" }),
+                "A final plan request failure must not prevent saving settings");
         }
 
         // Rollback must preserve foreign registrations and the original startup error even

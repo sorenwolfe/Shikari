@@ -31,6 +31,7 @@ public sealed class ReplayStore : IDisposable
     private readonly Dictionary<string, long> visibleOrder = new();
     private long nextOrder;
     private long pullGeneration;
+    private readonly List<(PlanDocument Plan, long Pull, StrategyMergeSession.PendingCommit Commit)> planSaves = new();
     private sealed record Completion(string Id, long Order, long Pull, ReplayAttempt? Attempt,
         StrategyMergeSession? Session, StrategyMergeSession.Prepared? Prepared, string Error, bool SaveFailed = false);
     private readonly ArenaTracker tracker = new();
@@ -122,6 +123,8 @@ public sealed class ReplayStore : IDisposable
     private void Update(IFramework framework)
     {
         if (disposed) return;
+        Plugin.Plans.Poll();
+        PublishPlanSaves();
         if (!loaded && loading.IsCompleted)
         {
             loaded = true;
@@ -139,6 +142,7 @@ public sealed class ReplayStore : IDisposable
         }
         if (loaded) Trim();
         PublishCompletions();
+        PublishPlanSaves();
         if (buffer == null) return;
         if (!Plugin.Config.ReplayEnabled) { Finish("Recording stopped"); return; }
         var time = RecordingTime;
@@ -275,8 +279,26 @@ public sealed class ReplayStore : IDisposable
             if (buffer != null || item.Pull != pullGeneration || item.Session == null || item.Prepared == null) continue;
             var plan = Plugin.Plans.Active;
             if (plan == null) continue;
-            try { status = item.Session.Commit(plan, item.Prepared, Plugin.Plans.SaveActive).Summary; }
+            try
+            {
+                var commit = item.Session.CommitAsync(plan, item.Prepared, Plugin.Plans.RequestSave);
+                planSaves.Add((plan, item.Pull, commit));
+                status = commit.Ticket == null ? commit.Result.Summary : "Recording saved. Saving its strategy update…";
+            }
             catch (Exception ex) { status = "The recording was saved, but its strategy update failed: " + ex.Message; }
+        }
+    }
+
+    private void PublishPlanSaves()
+    {
+        for (var i = planSaves.Count - 1; i >= 0; i--)
+        {
+            var item = planSaves[i];
+            var allowRollback = buffer == null && item.Pull == pullGeneration && ReferenceEquals(Plugin.Plans.Active, item.Plan) &&
+                (item.Commit.Ticket == null || Plugin.Plans.GetSaveState(item.Plan.Id).RequestedRevision == item.Commit.Ticket.Revision);
+            if (!item.Commit.TryComplete(allowRollback, out var result)) continue;
+            if (item.Pull == pullGeneration) status = result.Summary;
+            planSaves.RemoveAt(i);
         }
     }
 

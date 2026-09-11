@@ -2,6 +2,7 @@ using System;
 using Newtonsoft.Json;
 using Shikari.Model;
 using Shikari.Services.Replay;
+using Shikari.Services.Storage;
 namespace Shikari.Tests;
 public static class StrategyMergeTests
 {
@@ -56,6 +57,23 @@ public static class StrategyMergeTests
             "A prepared result cannot be committed by another source session");
         Check(backgroundSession.Commit(backgroundPlan, prepared, () => true).Accepted && backgroundPlan.Timeline.Count == 1,
             "The unchanged plan can commit a prepared result");
+        foreach (var change in new[] { "none", "edit", "newer-save" })
+        {
+            var asyncPlan = PlanDocument.CreateDefault(); asyncPlan.Slides[0].Title = "Alpha";
+            var asyncSession = new StrategyMergeSession(asyncPlan);
+            var proposal = asyncSession.Prepare(backgroundAttempt);
+            var priorJson = JsonConvert.SerializeObject(asyncPlan);
+            var ticket = new PlanSaveTicket(asyncPlan.Id, 1);
+            var pending = asyncSession.CommitAsync(asyncPlan, proposal, _ => ticket);
+            Check(asyncPlan.Timeline.Count == 1 && !pending.TryComplete(true, out _), "Queued enrichment is pending until durable acknowledgment");
+            if (change == "edit") asyncPlan.Notes = "Keep this new edit";
+            ticket.Source.SetResult(new(asyncPlan.Id, 1, PlanSaveOutcome.Failed, "Disk full", DateTime.UtcNow));
+            Check(pending.TryComplete(change != "newer-save", out var failure) && failure.Summary.Contains("save", StringComparison.OrdinalIgnoreCase),
+                "Failed asynchronous saving is visible");
+            if (change == "none") Check(priorJson == JsonConvert.SerializeObject(asyncPlan), "An unchanged failed proposal rolls back");
+            else Check(asyncPlan.Timeline.Count == 1 && (change != "edit" || asyncPlan.Notes == "Keep this new edit"),
+                "Newer edits or newer queued saves must prevent rollback");
+        }
         Console.WriteLine("PASS: staged enrichment, rollback, autosave, stale edits, switched plans, replay links and idempotence");
     }
 }

@@ -18,7 +18,41 @@ public static partial class ReplayIntegration
         BackgroundRetentionEdit(Path.Combine(directory, "pending-retention"));
         BackgroundTimeOrigin(Path.Combine(directory, "time-origin"));
         BackgroundStorageError(Path.Combine(directory, "later-error"));
+        foreach (var scenario in new[] { "saved", "failure", "edited", "newer-save" })
+            BackgroundPlanSave(Path.Combine(directory, "plan-" + scenario), scenario);
         Console.WriteLine("PASS: detached finalization, framework-only publication, stale edits/switches/new pulls, ordered clear/delete/import, failed disk recovery and unload");
+    }
+
+    private static void BackgroundPlanSave(string directory, string scenario)
+    {
+        Plugin.PluginInterface.Directory = directory;
+        var plan = Plugin.Plans.Active = PlanDocument.CreateDefault();
+        plan.Slides[0].Title = "Observed cast";
+        Plugin.Plans.HoldSaves = true;
+        try
+        {
+            using var store = new ReplayStore();
+            WaitForStorage(store, "loading"); Plugin.Framework.Tick();
+            Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); Plugin.Encounter.End();
+            CompleteQueued(store);
+            var ticket = Plugin.Plans.LastTicket!;
+            Check(!ticket.Completion.IsCompleted && plan.StrategyEvidence.Count == 1 &&
+                store.Status.Contains("Saving its strategy update"), "A pending plan write must not block the framework or claim durable success");
+            Plugin.Framework.Tick();
+            Check(!ticket.Completion.IsCompleted, "Drawing another frame cannot acknowledge a pending save");
+            if (scenario == "edited") plan.Notes = "Keep this newer edit";
+            if (scenario == "newer-save") Plugin.Plans.RequestSave(plan);
+            FakePlans.Complete(ticket, scenario == "saved");
+            Plugin.Framework.Tick();
+            Check(!store.Status.Contains("Saving its strategy update"), "The framework must publish completed plan save results");
+            if (scenario == "failure")
+                Check(plan.StrategyEvidence.Count == 0 && store.Status.Contains("restored"), "Unchanged failed proposals roll back on the owner thread");
+            else
+                Check(plan.StrategyEvidence.Count == 1, "Newer edits or queued snapshots must protect the proposal from rollback");
+            if (scenario == "edited") Check(plan.Notes == "Keep this newer edit", "Failure must preserve newer edits");
+            if (scenario == "newer-save") FakePlans.Complete(Plugin.Plans.LastTicket!, true);
+        }
+        finally { Plugin.Plans.HoldSaves = false; }
     }
 
     private static void BackgroundTimeOrigin(string directory)

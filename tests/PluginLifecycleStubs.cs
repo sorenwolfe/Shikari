@@ -13,11 +13,14 @@ namespace Shikari.Tests
         public static bool ThrowDuringCleanup;
         public static readonly List<Resource> Resources = new();
         public static readonly List<string> Saves = new();
+        public static readonly List<string> PlanEvents = new();
+        public static bool ThrowOnPlanRequest;
         public static CancellationToken? BuildToken;
         public static TaskCompletionSource? BuildCompletion;
         public static void Reset()
         {
             FailAt = null; ThrowDuringCleanup = false; Resources.Clear(); Saves.Clear();
+            PlanEvents.Clear(); ThrowOnPlanRequest = false;
             BuildToken = null; BuildCompletion = null;
             StartupFailure = new InvalidOperationException("startup fault");
         }
@@ -166,10 +169,24 @@ namespace Shikari.Services
             return Tests.Probe.BuildCompletion?.Task ?? Task.CompletedTask;
         }
     }
-    public sealed class PlanStore
+    public sealed class PlanStore : Tests.Resource
     {
-        public PlanStore() => Tests.Probe.Hit("construct.PlanStore");
+        public IEnumerable<object> All => new[] { new object() };
+        public string? LastSaveError => null;
         public void SaveAll() => Tests.Probe.Save("plans");
+        public object RequestSave(object document)
+        {
+            if (DisposeCount != 0) throw new ObjectDisposedException(nameof(PlanStore));
+            Tests.Probe.PlanEvents.Add("request");
+            Tests.Probe.Save("plans");
+            if (Tests.Probe.ThrowOnPlanRequest) throw new IOException("final plan request fault");
+            return new object();
+        }
+        public override void Dispose()
+        {
+            Tests.Probe.PlanEvents.Add("dispose");
+            base.Dispose();
+        }
     }
     public sealed class BackdropStore : Tests.Resource { }
     public sealed class RosterResolver { }

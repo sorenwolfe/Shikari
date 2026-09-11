@@ -8,6 +8,7 @@ using Newtonsoft.Json;
 using Shikari.Model;
 using Shikari.Services;
 using Shikari.Services.Replay;
+using Shikari.Services.Storage;
 
 namespace Dalamud.Plugin.Services { public interface IFramework { } }
 namespace Shikari.Services
@@ -65,6 +66,20 @@ namespace Shikari
         public int Saves;
         public bool SaveSucceeds = true;
         public bool SaveActive() { Saves++; return SaveSucceeds; }
+        public bool HoldSaves;
+        public PlanSaveTicket? LastTicket;
+        public void Poll() { }
+        public PlanSaveState GetSaveState(string id) => new(LastTicket?.Completion.IsCompleted == false, null,
+            LastTicket?.Revision ?? 0, 0);
+        public PlanSaveTicket RequestSave(PlanDocument plan)
+        {
+            LastTicket = new PlanSaveTicket(plan.Id, ++Saves);
+            if (!HoldSaves) Complete(LastTicket, SaveSucceeds);
+            return LastTicket;
+        }
+        public static void Complete(PlanSaveTicket ticket, bool success) => ticket.Source.SetResult(
+            new PlanSaveResult(ticket.PlanId, ticket.Revision, success ? PlanSaveOutcome.Saved : PlanSaveOutcome.Failed,
+                success ? null : "Test failure", DateTime.UtcNow));
     }
     public sealed class FakeActions { public FakeAction Get(uint id) => new(); }
     public sealed class FakeAction { public string Name => "Observed cast"; }

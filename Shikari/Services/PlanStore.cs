@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Shikari.Model;
 using Shikari.Services.Storage;
@@ -14,16 +15,25 @@ namespace Shikari.Services;
 /// Plans live as individual JSON files under the plugin's config directory so they can be
 /// backed up, diffed, or hand-edited.
 /// </summary>
-public sealed class PlanStore
+public sealed class PlanStore : IDisposable
 {
     private static readonly JsonSerializerSettings Settings = PlanJson.Readable();
 
     private readonly string directory;
     private readonly Dictionary<string, PlanDocument> plans = new();
+    private readonly PlanPersistenceQueue persistence;
+    private readonly Dictionary<long, (PlanDocument Document, PlanSaveTicket Ticket)> acknowledgements = new();
+    private readonly HashSet<string> deletedIds = new();
+    private bool disposed;
 
-    public PlanStore()
+    public PlanStore() : this(Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "plans"), AtomicFile.WriteAllText)
     {
-        directory = Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "plans");
+    }
+
+    internal PlanStore(string directory, Action<string, string> write)
+    {
+        this.directory = directory;
+        persistence = new PlanPersistenceQueue(write);
         Directory.CreateDirectory(directory);
         LoadAll();
     }
@@ -90,6 +100,7 @@ public sealed class PlanStore
     {
         var doc = PlanDocument.CreateDefault(name);
         plans[doc.Id] = doc;
+        deletedIds.Remove(doc.Id);
         Save(doc);
         SetActive(doc);
         return doc;
@@ -114,6 +125,7 @@ public sealed class PlanStore
         }
 
         plans[doc.Id] = doc;
+        deletedIds.Remove(doc.Id);
         Save(doc);
         SetActive(doc);
         return doc;
@@ -133,11 +145,15 @@ public sealed class PlanStore
     public void Delete(PlanDocument doc)
     {
         plans.Remove(doc.Id);
+        deletedIds.Add(doc.Id);
         try
         {
             var path = PathFor(doc);
-            if (File.Exists(path))
-                File.Delete(path);
+            var result = persistence.Enqueue(doc.Id, path, null, coalesce: false, delete: true)
+                .Completion.GetAwaiter().GetResult();
+            if (result.Outcome == PlanSaveOutcome.Failed)
+                Plugin.Log.Error(new IOException(result.Error), "Could not delete plan {Name}.", doc.Name);
+            Poll();
         }
         catch (Exception ex)
         {
@@ -154,22 +170,70 @@ public sealed class PlanStore
     public bool Save(PlanDocument doc)
     {
         var previousModified = doc.ModifiedUtc;
+        var ticket = Request(doc, coalesce: false);
+        var result = ticket.Completion.GetAwaiter().GetResult();
+        Poll();
+        doc.ModifiedUtc = result.Outcome == PlanSaveOutcome.Saved ? result.ModifiedUtc : previousModified;
+        return result.Outcome == PlanSaveOutcome.Saved;
+    }
+
+    /// <summary>Captures on the caller thread. Completion means the captured revision reached durable storage.</summary>
+    public PlanSaveTicket RequestSave(PlanDocument doc) => Request(doc, coalesce: true);
+
+    public PlanSaveState GetSaveState(string planId) => persistence.GetState(planId);
+
+    private PlanSaveTicket Request(PlanDocument doc, bool coalesce)
+    {
+        PlanSaveTicket ticket;
+        var id = doc.Id ?? "";
         try
         {
             var path = PathFor(doc);
-            doc.ModifiedUtc = DateTime.UtcNow;
-            var json = JsonConvert.SerializeObject(doc, Settings);
-            AtomicFile.WriteAllText(path, json);
-            LastSaveError = null;
-            return true;
+            if (deletedIds.Contains(id) || plans.TryGetValue(id, out var current) && !ReferenceEquals(doc, current))
+                ticket = persistence.Enqueue(id, path, null, coalesce, superseded: true);
+            else
+                ticket = persistence.Enqueue(id, path, PlanSnapshot.Capture(doc, DateTime.UtcNow), coalesce);
         }
         catch (Exception ex)
         {
-            doc.ModifiedUtc = previousModified;
-            LastSaveError = "Could not save " + doc.Name + ": " + ex.Message;
-            Plugin.Log.Error(ex, "Could not save plan {Name}.", doc.Name);
-            return false;
+            ticket = persistence.Enqueue(id, "", null, coalesce, failure: "Could not save " + doc.Name + ": " + ex.Message);
         }
+        acknowledgements[ticket.Revision] = (doc, ticket);
+        return ticket;
+    }
+
+    /// <summary>Publish completed metadata on the owner thread; the worker never reads live documents or Plugin.</summary>
+    public void Poll()
+    {
+        while (persistence.TryDequeueCompletion(out var result))
+        {
+            if (!acknowledgements.Remove(result.Revision, out var pending)) continue;
+            var doc = pending.Document;
+            if (result.Outcome == PlanSaveOutcome.Saved && !disposed &&
+                !deletedIds.Contains(result.PlanId) && doc.Id == result.PlanId &&
+                (!plans.TryGetValue(result.PlanId, out var current) || ReferenceEquals(doc, current)) &&
+                persistence.GetState(result.PlanId).RequestedRevision == result.Revision)
+                doc.ModifiedUtc = result.ModifiedUtc;
+            if (result.Outcome == PlanSaveOutcome.Failed)
+                Plugin.Log.Error(new IOException(result.Error), "Could not save plan {Name}.", doc.Name);
+        }
+        LastSaveError = persistence.LastError;
+    }
+
+    /// <summary>True only if queued writes finish within the bound and no plan has an unresolved storage failure.</summary>
+    public Task<bool> FlushAsync(TimeSpan timeout) => persistence.FlushAsync(timeout);
+
+    /// <summary>Stop new requests, then wait at most timeout. Timed-out tickets remain pending, never falsely saved.</summary>
+    public Task<bool> DrainAsync(TimeSpan timeout) => persistence.FlushAsync(timeout, stopAccepting: true);
+
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true;
+        var drained = DrainAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+        Poll();
+        if (!drained && LastSaveError == null)
+            LastSaveError = "Plan storage did not finish before shutdown; queued saves remain pending.";
     }
 
     public bool SaveActive() => Active == null || Save(Active);
