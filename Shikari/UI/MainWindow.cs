@@ -48,6 +48,7 @@ public sealed partial class MainWindow : Window, IDisposable
         Size = new Vector2(1100, 720);
         SizeCondition = ImGuiCond.FirstUseEver;
         Plugin.Encounter.CombatStarted += CancelAssignmentCheck;
+        Plugin.Encounter.CombatStarted += InvalidatePullValidation;
     }
 
     private ThemeScope theme;
@@ -158,12 +159,14 @@ public sealed partial class MainWindow : Window, IDisposable
         if (Plan != null) autosave.MarkDirty(Plan);
         editOccurred = true;
         InvalidateAssignmentCoverage();
+        InvalidatePullValidation();
     }
 
     public override void Update()
     {
         AdvanceAssignmentCheck(Plan);
         Plugin.Plans.Poll();
+        AdvancePullValidation();
         if (autosave.Update(Plan, DateTime.UtcNow, Plugin.Plans.RequestSave))
             Plugin.SaveConfig();
     }
@@ -171,6 +174,7 @@ public sealed partial class MainWindow : Window, IDisposable
     public override void OnClose()
     {
         CancelAssignmentCheck();
+        InvalidatePullValidation();
         if (dirty && Plan != null) autosave.RequestNow(Plan, DateTime.UtcNow, Plugin.Plans.RequestSave);
     }
 
@@ -360,7 +364,9 @@ public sealed partial class MainWindow : Window, IDisposable
     public void Dispose()
     {
         Plugin.Encounter.CombatStarted -= CancelAssignmentCheck;
+        Plugin.Encounter.CombatStarted -= InvalidatePullValidation;
         CancelAssignmentCheck();
+        pullValidation.Dispose();
         DisposeWtfDig();
         DisposeImport();
     }

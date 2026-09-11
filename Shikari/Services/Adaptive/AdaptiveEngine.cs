@@ -50,10 +50,12 @@ public sealed class AdaptiveEngine
         public readonly Dictionary<(uint, uint), StatusObservation> Statuses = new();
         public readonly Dictionary<uint, float> SourceLessRemovals = new();
         public HashSet<int> Matches = new();
+        public bool EvidenceChanged;
     }
     private readonly List<AdaptiveMechanic> rules;
     private readonly List<Armed> armed = new();
     public int ActiveRuleCount => rules.Count;
+    public int PendingRuleCount => armed.Count;
     /// <summary>Unreadable or replaced actors cannot carry pending assignments across a gap.</summary>
     public void InvalidateEvidence()
     {
@@ -63,6 +65,7 @@ public sealed class AdaptiveEngine
             state.SourceLessRemovals.Clear();
             state.Matches.Clear();
             state.SettledSince = -1;
+            state.EvidenceChanged = false;
         }
     }
 
@@ -85,14 +88,16 @@ public sealed class AdaptiveEngine
         }
     }
 
-    public List<AdaptiveDecision> Update(IReadOnlyList<StatusObservation> observations, float time)
+    /// <summary>
+    /// Ingest chronologically without evaluating or emitting. A replay can deliver observations
+    /// before a later cast rearms a rule, then evaluate all rules together at its next poll.
+    /// </summary>
+    public void Observe(IReadOnlyList<StatusObservation> observations, float time)
     {
-        var decisions = new List<AdaptiveDecision>();
-        if (!float.IsFinite(time) || time < 0) return decisions;
-        foreach (var state in armed.ToArray())
+        if (!float.IsFinite(time) || time < 0) return;
+        foreach (var state in armed)
         {
             var deadline = state.Start + state.Rule.WindowSeconds;
-            var changed = false;
             foreach (var observed in observations)
             {
                 if (observed == null || !float.IsFinite(observed.Time) ||
@@ -110,7 +115,7 @@ public sealed class AdaptiveEngine
                     state.SourceLessRemovals[observed.StatusId] = observed.Time;
                     foreach (var candidate in state.Statuses.Where(p => p.Key.Item1 == observed.StatusId && p.Value.Time <= observed.Time).ToArray())
                     {
-                        changed |= !SameObservation(candidate.Value, observed);
+                        state.EvidenceChanged |= !SameObservation(candidate.Value, observed);
                         state.Statuses[candidate.Key] = observed;
                     }
                     continue;
@@ -121,8 +126,21 @@ public sealed class AdaptiveEngine
                 if (state.Statuses.TryGetValue(key, out var prior) &&
                     (prior.Time > observed.Time || SameObservation(prior, observed))) continue;
                 state.Statuses[key] = observed;
-                changed = true;
+                state.EvidenceChanged = true;
             }
+        }
+    }
+
+    public List<AdaptiveDecision> Update(IReadOnlyList<StatusObservation> observations, float time)
+    {
+        var decisions = new List<AdaptiveDecision>();
+        if (!float.IsFinite(time) || time < 0) return decisions;
+        Observe(observations, time);
+        foreach (var state in armed.ToArray())
+        {
+            var deadline = state.Start + state.Rule.WindowSeconds;
+            var changed = state.EvidenceChanged;
+            state.EvidenceChanged = false;
             var eligible = state.Statuses.Values.Where(o => o.Time <= deadline).ToArray();
             var matches = Enumerable.Range(0, state.Rule.Branches.Count)
                 .Where(i => Matches(state.Rule.Branches[i], eligible, time)).ToHashSet();

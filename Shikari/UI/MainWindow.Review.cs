@@ -122,6 +122,7 @@ public sealed partial class MainWindow
         DrawReviewTransport(attempt);
         DrawAdaptiveEvidence(attempt);
         DrawEvidencePanel(attempt);
+        DrawPullValidation(attempt);
         if (attempt.Mechanics.Count > 0 && SelectedReviewMechanic(attempt)?.Time != reviewTime)
             reviewMechanicIndex = Math.Max(0, attempt.Mechanics.FindLastIndex(m => m.Time <= reviewTime));
 
@@ -141,6 +142,7 @@ public sealed partial class MainWindow
 
     private void SelectReviewAttempt(ReplayAttempt attempt)
     {
+        InvalidatePullValidation();
         reviewAttemptId = attempt.Id;
         reviewCompareId = string.Empty;
         reviewTime = 0;

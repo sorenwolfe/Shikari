@@ -285,6 +285,7 @@ public sealed partial class MainWindow
     {
         // Metadata has already changed in memory, even if validation or disk save later fails.
         InvalidateAssignmentCoverage();
+        InvalidatePullValidation();
         try
         {
             if (Plan?.Id == attempt.Plan.Id && !Plugin.Encounter.InCombat)

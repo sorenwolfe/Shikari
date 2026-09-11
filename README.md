@@ -132,6 +132,18 @@ Repeated imports of the same FF Logs fight count once. Local and log recordings 
 
 Log positions appear on a source map because their coordinates differ from the plan. **Overlay on strategy** needs three known landmarks entered in both coordinate systems. Alignment belongs to that slide; missing position samples remain gaps. When comparing pulls, Shikari lines them up at the same cast occurrence.
 
+### Validate a whole pull
+
+In **Review**, expand **Validate pull** and choose a player. Shikari replays the plan's assignment rules together through the recorded casts and statuses, including conflicting rules and casts that start a new assignment window.
+
+Use the plan captured in the recording, or check **Use current plan instead of recorded plan** to try your edits. Disabled rules stay out of the run unless you check **Include disabled rules for testing**; this does not enable them during combat. Press **Validate pull**, then select a simulated decision to jump to that moment. **Preview assignment board and cue** shows its board and assignment text alongside the normal replay controls.
+
+**Compare recorded decisions** checks the original local player's recorded assignments when the tested rules and boards still match. FF Logs does not contain Shikari's own decisions. For either source, **Reviewed expectations** lets you enter an assignment you verified from the strategy and pull, then compare it with the simulation. Expectations stay in this session and clear when the inputs change; unreviewed outcomes remain unknown.
+
+Use **Slower polling** or **Missing observations** to test how rules respond to delayed decisions or a one-second evidence gap. These are synthetic conditions. Missing status history, unknown required values, incomplete windows and unverified encounter identity cannot establish a successful validation. Choosing a test territory selects rules but does not verify the log's encounter.
+
+This checks assignment decisions. The cue is a preview that assumes following is enabled; it does not replay manual holds, timeline reminder delivery, or Ember's full behavior. A matching assignment or player position does not prove that the mechanic succeeded.
+
 New local recordings also retain readable party buffs, debuffs, and positions, so you can inspect your own pulls through the same controls. Older recordings keep their existing playback but won't gain status history retroactively. Unknown status parameters stay unknown; incomplete log imports can be inspected but can't generate rules.
 
 Rule drafts use observed status durations with a two-second margin. Review those ranges for mechanics where timer lengths determine the assignment. Sharing sends the plan's rules and compact strategy references, while full replay files stay local.
