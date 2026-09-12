@@ -100,7 +100,8 @@ public static class PullValidationComparison
 
     private static string? Readiness(PullValidationResult? result)
     {
-        if (result == null || !result.Complete || !result.ScopeVerified)
+        if (result == null || !result.ScopeVerified ||
+            (result.HasOccurrenceReadiness ? !result.EvidenceUsable : !result.Complete))
             return "The validation is incomplete or its evidence scope is unverified; agreement remains unknown.";
         if (string.IsNullOrEmpty(result.AttemptId) || result.ActorId <= 0 || result.TerritoryId == 0 ||
             !float.IsFinite(result.Duration) || result.Duration < 0 || result.Decisions.Count > MaxDecisions)
@@ -108,6 +109,8 @@ public static class PullValidationComparison
         if (result.Plan == null || !RulesAvailable(result.Plan) ||
             result.Plan.Slides == null || result.Plan.Slides.Any(s => s == null || !BoardAvailable(s)))
             return "The tested plan's rule or destination snapshot is unavailable or malformed.";
+        if (result.HasOccurrenceReadiness && (result.Occurrences.Count > ReplayBuffer.MaxCasts || result.Occurrences.Any(o => o == null)))
+            return "The occurrence coverage is unavailable or exceeds its recording limit.";
         return null;
     }
 
@@ -119,7 +122,10 @@ public static class PullValidationComparison
         var simulated = result.Decisions.GroupBy(Identity).ToDictionary(g => g.Key, g => g.ToArray());
         var references = reference.GroupBy(Identity).ToDictionary(g => g.Key, g => g.ToArray());
         var rows = new List<PullComparisonRow>();
-        foreach (var key in simulated.Keys.Union(references.Keys).OrderBy(k => k.Action)
+        var occurrences = result.HasOccurrenceReadiness
+            ? result.Occurrences.GroupBy(o => new Key(o.RuleId, o.AnchorActionId, o.Occurrence)).ToDictionary(g => g.Key, g => g.ToArray())
+            : new Dictionary<Key, PullValidationOccurrence[]>();
+        foreach (var key in simulated.Keys.Union(references.Keys).Union(occurrences.Keys).OrderBy(k => k.Action)
                      .ThenBy(k => k.Occurrence).ThenBy(k => k.RuleId, StringComparer.Ordinal))
         {
             var simulations = simulated.GetValueOrDefault(key) ?? Array.Empty<AdaptiveDecision>();
@@ -128,7 +134,9 @@ public static class PullValidationComparison
             var r = originals.Length == 1 ? originals[0] : null;
             var row = Row(key, s, r, recorded);
             rows.Add(row);
-            if (simulations.Length > 1 || originals.Length > 1)
+            if (result.HasOccurrenceReadiness && OccurrenceReadiness(result, occurrences.GetValueOrDefault(key)) is { } unavailable)
+                Set(row, PullComparisonOutcome.Unknown, unavailable);
+            else if (simulations.Length > 1 || originals.Length > 1)
                 Set(row, PullComparisonOutcome.Unknown, "Duplicate rule/action/occurrence decisions make this comparison ambiguous.");
             else if (s != null && !ValidDecision(result, s) || r != null && !ValidDecision(result, r))
                 Set(row, PullComparisonOutcome.Unknown, "The rule, action, occurrence, branch or decision time is missing or incompatible with the tested plan.");
@@ -150,6 +158,20 @@ public static class PullValidationComparison
                     : "The simulated assignment outcome agrees with the independently reviewed expectation.");
         }
         return rows.Count > 0 ? rows : Unknown("No assignment outcomes are available to compare.");
+    }
+
+    private static string? OccurrenceReadiness(PullValidationResult result, PullValidationOccurrence[]? entries)
+    {
+        if (entries?.Length != 1)
+            return "This rule/action/occurrence has no unique armed assignment window; coverage remains unknown.";
+        var occurrence = entries[0];
+        if (!float.IsFinite(occurrence.StartTime) || occurrence.StartTime < 0 ||
+            !float.IsFinite(occurrence.Deadline) || occurrence.Deadline < 0 ||
+            !float.IsFinite(occurrence.EndTime) || occurrence.EndTime < occurrence.StartTime || occurrence.EndTime > result.Duration)
+            return "This assignment window has invalid timing; coverage remains unknown.";
+        if (!occurrence.Complete || occurrence.Reasons.Count > 0)
+            return occurrence.Reasons.Count > 0 ? string.Join(" ", occurrence.Reasons) : "This assignment window has incomplete evidence.";
+        return null;
     }
 
     private static bool ValidDecision(PullValidationResult result, AdaptiveDecision d)

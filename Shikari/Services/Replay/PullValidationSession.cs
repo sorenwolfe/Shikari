@@ -13,7 +13,7 @@ public sealed class PullValidationSession : IDisposable
 {
     private sealed record Stamp(PlanDocument Plan, ReplayAttempt Attempt, string PlanId, string AttemptId,
         long EditRevision, long EvidenceRevision);
-    private sealed record Output(PullValidationResult Result, List<PullComparisonRow> RecordedRows);
+    private sealed record Output(PullValidationResult Result, List<PullComparisonRow> RecordedRows, string CaseFingerprint);
     private sealed record Job(CancellationTokenSource Cancel, Task<Output> Work);
     private readonly Func<PlanDocument, ReplayAttempt, long, PullValidationOptions, CancellationToken, PullValidationResult> run;
     private Stamp? stamp;
@@ -23,6 +23,7 @@ public sealed class PullValidationSession : IDisposable
     public PullValidationResult? Result { get; private set; }
     public ReplayAttempt? Snapshot { get; private set; }
     public string? Error { get; private set; }
+    public string CaseFingerprint { get; private set; } = "";
     public IReadOnlyList<PullComparisonRow> RecordedRows { get; private set; } = Array.Empty<PullComparisonRow>();
 
     public PullValidationSession() : this(PullValidationRunner.Run) { }
@@ -45,7 +46,10 @@ public sealed class PullValidationSession : IDisposable
             {
                 var result = run(frozen, snapshot, actorId, options, cancel.Token);
                 cancel.Token.ThrowIfCancellationRequested();
-                return new Output(result, PullValidationComparison.CompareRecorded(result, snapshot));
+                var rows = PullValidationComparison.CompareRecorded(result, snapshot);
+                var binding = PullValidationCases.Fingerprint(result.Plan, snapshot, actorId, options.TerritoryId);
+                cancel.Token.ThrowIfCancellationRequested();
+                return new Output(result, rows, binding);
             }, cancel.Token));
         }
         catch (Exception ex) { Cancel(); Error = "Could not prepare validation: " + ex.Message; }
@@ -64,7 +68,7 @@ public sealed class PullValidationSession : IDisposable
         try
         {
             var output = completed.Work.GetAwaiter().GetResult();
-            Result = output.Result; RecordedRows = output.RecordedRows;
+            Result = output.Result; RecordedRows = output.RecordedRows; CaseFingerprint = output.CaseFingerprint;
         }
         catch (OperationCanceledException) { Result = null; }
         catch (Exception ex) { Error = "Validation could not finish: " + ex.Message; }
@@ -74,7 +78,8 @@ public sealed class PullValidationSession : IDisposable
     public void Cancel()
     {
         var abandoned = job;
-        job = null; stamp = null; Result = null; Snapshot = null; Error = null; RecordedRows = Array.Empty<PullComparisonRow>();
+        job = null; stamp = null; Result = null; Snapshot = null; Error = null; CaseFingerprint = "";
+        RecordedRows = Array.Empty<PullComparisonRow>();
         if (abandoned == null) return;
         abandoned.Cancel.Cancel();
         // Cancellation never waits for analysis. Observe faults even if its consumer is gone.

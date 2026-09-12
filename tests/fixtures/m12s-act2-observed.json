@@ -1,0 +1,531 @@
+{
+  "SchemaVersion": 1,
+  "Provenance": {
+    "SourceUrl": "https://www.fflogs.com/reports/yaP6A3hwN7b8KnQJ?fight=2",
+    "RetrievedUtc": "2026-09-12",
+    "Kind": "Observed FF Logs assignment events; anonymized actor IDs",
+    "IndependentPullCount": 1,
+    "SourceComplete": true,
+    "Difficulty": 101,
+    "GameZoneId": 1327,
+    "SelectedInputsOnly": true,
+    "ReviewedAgainst": [
+      "https://github.com/mczub/wtfdig/blob/2262bfea410539c9d2465a03b67094bc4c1f7761/src/routes/74/m12s/data.ts#L4555",
+      "https://github.com/awgil/ffxiv_bossmod/blob/ecf7a1d2d4a694bf177fc5a4b7966e0f6524f2ad/BossMod.Modules/Dawntrail/Savage/RM12S1TheLindwurm/RM12S1TheLindwurmEnums.cs",
+      "https://github.com/awgil/ffxiv_bossmod/blob/ecf7a1d2d4a694bf177fc5a4b7966e0f6524f2ad/BossMod.Modules/Dawntrail/Savage/RM12S1TheLindwurm/GrotesquerieAct2.cs"
+    ],
+    "ScopeNotes": "One observed P1 kill. Contains only the Act 2 anchor and six relevant status types for this occurrence. Original party names and report actor keys removed; fixture actors 1-8 and caster 9 are local aliases. Canonical IDs are source-corroborated test inputs, not an installed game-sheet check. FF Logs gameZone 1327 is metadata, not a verified Dalamud TerritoryType mapping; the evaluator test uses an explicitly synthetic territory 1 binding. Eight assignment identities in one pull do not establish eight independent pulls, routes, strategy adherence, success of individual mechanics, or a production acquisition-window default."
+  },
+  "Data": {
+    "ReportCode": "yaP6A3hwN7b8KnQJ",
+    "Fight": {
+      "Id": 2,
+      "EncounterId": 104,
+      "Name": "Lindwurm",
+      "StartTime": 837451,
+      "EndTime": 1263123,
+      "Kill": true
+    },
+    "Actors": [
+      {
+        "Id": 1,
+        "Name": "Player 1",
+        "Type": "Player",
+        "Job": "Gunbreaker"
+      },
+      {
+        "Id": 2,
+        "Name": "Player 2",
+        "Type": "Player",
+        "Job": "Samurai"
+      },
+      {
+        "Id": 3,
+        "Name": "Player 3",
+        "Type": "Player",
+        "Job": "Warrior"
+      },
+      {
+        "Id": 4,
+        "Name": "Player 4",
+        "Type": "Player",
+        "Job": "RedMage"
+      },
+      {
+        "Id": 5,
+        "Name": "Player 5",
+        "Type": "Player",
+        "Job": "Scholar"
+      },
+      {
+        "Id": 6,
+        "Name": "Player 6",
+        "Type": "Player",
+        "Job": "Dancer"
+      },
+      {
+        "Id": 7,
+        "Name": "Player 7",
+        "Type": "Player",
+        "Job": "WhiteMage"
+      },
+      {
+        "Id": 8,
+        "Name": "Player 8",
+        "Type": "Player",
+        "Job": "Dragoon"
+      }
+    ],
+    "EnemyCasts": [
+      {
+        "SourceId": 9,
+        "AbilityId": 48830,
+        "AbilityName": "Grotesquerie: Act 2",
+        "TimeSeconds": 117.258,
+        "CastSeconds": 2.986,
+        "CompletionTimeSeconds": 120.244,
+        "IsCastStart": true,
+        "FromEnemy": true
+      }
+    ]
+  },
+  "Evidence": {
+    "Complete": true,
+    "StatusEvents": [
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 1,
+        "StatusId": 4752,
+        "AbilityId": 1004752,
+        "Name": "Bonds of Flesh α",
+        "Change": 0,
+        "Duration": 26.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 7,
+        "StatusId": 3451,
+        "AbilityId": 1003451,
+        "Name": "Fourth in Line",
+        "Change": 0,
+        "Duration": 9999.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 8,
+        "StatusId": 4754,
+        "AbilityId": 1004754,
+        "Name": "Bonds of Flesh β",
+        "Change": 0,
+        "Duration": 41.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 7,
+        "StatusId": 4752,
+        "AbilityId": 1004752,
+        "Name": "Bonds of Flesh α",
+        "Change": 0,
+        "Duration": 41.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 6,
+        "StatusId": 3006,
+        "AbilityId": 1003006,
+        "Name": "Third in Line",
+        "Change": 0,
+        "Duration": 9999.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 5,
+        "StatusId": 3006,
+        "AbilityId": 1003006,
+        "Name": "Third in Line",
+        "Change": 0,
+        "Duration": 9999.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 6,
+        "StatusId": 4754,
+        "AbilityId": 1004754,
+        "Name": "Bonds of Flesh β",
+        "Change": 0,
+        "Duration": 36.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 5,
+        "StatusId": 4752,
+        "AbilityId": 1004752,
+        "Name": "Bonds of Flesh α",
+        "Change": 0,
+        "Duration": 36.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 8,
+        "StatusId": 3451,
+        "AbilityId": 1003451,
+        "Name": "Fourth in Line",
+        "Change": 0,
+        "Duration": 9999.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 3,
+        "StatusId": 3005,
+        "AbilityId": 1003005,
+        "Name": "Second in Line",
+        "Change": 0,
+        "Duration": 9999.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 4,
+        "StatusId": 4754,
+        "AbilityId": 1004754,
+        "Name": "Bonds of Flesh β",
+        "Change": 0,
+        "Duration": 31.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 3,
+        "StatusId": 4752,
+        "AbilityId": 1004752,
+        "Name": "Bonds of Flesh α",
+        "Change": 0,
+        "Duration": 31.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 2,
+        "StatusId": 3004,
+        "AbilityId": 1003004,
+        "Name": "First in Line",
+        "Change": 0,
+        "Duration": 9999.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 1,
+        "StatusId": 3004,
+        "AbilityId": 1003004,
+        "Name": "First in Line",
+        "Change": 0,
+        "Duration": 9999.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 2,
+        "StatusId": 4754,
+        "AbilityId": 1004754,
+        "Name": "Bonds of Flesh β",
+        "Change": 0,
+        "Duration": 26.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 121.403,
+        "SourceId": -1,
+        "TargetId": 4,
+        "StatusId": 3005,
+        "AbilityId": 1003005,
+        "Name": "Second in Line",
+        "Change": 0,
+        "Duration": 9999.0,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 147.383,
+        "SourceId": -1,
+        "TargetId": 1,
+        "StatusId": 4752,
+        "AbilityId": 1004752,
+        "Name": "Bonds of Flesh α",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 147.383,
+        "SourceId": -1,
+        "TargetId": 1,
+        "StatusId": 3004,
+        "AbilityId": 1003004,
+        "Name": "First in Line",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 147.383,
+        "SourceId": -1,
+        "TargetId": 2,
+        "StatusId": 4754,
+        "AbilityId": 1004754,
+        "Name": "Bonds of Flesh β",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 147.383,
+        "SourceId": -1,
+        "TargetId": 2,
+        "StatusId": 3004,
+        "AbilityId": 1003004,
+        "Name": "First in Line",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 152.376,
+        "SourceId": -1,
+        "TargetId": 4,
+        "StatusId": 3005,
+        "AbilityId": 1003005,
+        "Name": "Second in Line",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 152.376,
+        "SourceId": -1,
+        "TargetId": 4,
+        "StatusId": 4754,
+        "AbilityId": 1004754,
+        "Name": "Bonds of Flesh β",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 152.376,
+        "SourceId": -1,
+        "TargetId": 3,
+        "StatusId": 4752,
+        "AbilityId": 1004752,
+        "Name": "Bonds of Flesh α",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 152.376,
+        "SourceId": -1,
+        "TargetId": 3,
+        "StatusId": 3005,
+        "AbilityId": 1003005,
+        "Name": "Second in Line",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 157.365,
+        "SourceId": -1,
+        "TargetId": 5,
+        "StatusId": 4752,
+        "AbilityId": 1004752,
+        "Name": "Bonds of Flesh α",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 157.365,
+        "SourceId": -1,
+        "TargetId": 5,
+        "StatusId": 3006,
+        "AbilityId": 1003006,
+        "Name": "Third in Line",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 157.365,
+        "SourceId": -1,
+        "TargetId": 6,
+        "StatusId": 4754,
+        "AbilityId": 1004754,
+        "Name": "Bonds of Flesh β",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 157.365,
+        "SourceId": -1,
+        "TargetId": 6,
+        "StatusId": 3006,
+        "AbilityId": 1003006,
+        "Name": "Third in Line",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 162.4,
+        "SourceId": -1,
+        "TargetId": 8,
+        "StatusId": 4754,
+        "AbilityId": 1004754,
+        "Name": "Bonds of Flesh β",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 162.4,
+        "SourceId": -1,
+        "TargetId": 7,
+        "StatusId": 4752,
+        "AbilityId": 1004752,
+        "Name": "Bonds of Flesh α",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 162.4,
+        "SourceId": -1,
+        "TargetId": 7,
+        "StatusId": 3451,
+        "AbilityId": 1003451,
+        "Name": "Fourth in Line",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      },
+      {
+        "Time": 162.4,
+        "SourceId": -1,
+        "TargetId": 8,
+        "StatusId": 3451,
+        "AbilityId": 1003451,
+        "Name": "Fourth in Line",
+        "Change": 2,
+        "Duration": null,
+        "Parameter": null,
+        "Stacks": null
+      }
+    ]
+  },
+  "Expected": [
+    {
+      "ActorId": 1,
+      "Number": 1,
+      "Letter": "A",
+      "Label": "I / Bonds A"
+    },
+    {
+      "ActorId": 2,
+      "Number": 1,
+      "Letter": "B",
+      "Label": "I / Bonds B"
+    },
+    {
+      "ActorId": 3,
+      "Number": 2,
+      "Letter": "A",
+      "Label": "II / Bonds A"
+    },
+    {
+      "ActorId": 4,
+      "Number": 2,
+      "Letter": "B",
+      "Label": "II / Bonds B"
+    },
+    {
+      "ActorId": 5,
+      "Number": 3,
+      "Letter": "A",
+      "Label": "III / Bonds A"
+    },
+    {
+      "ActorId": 6,
+      "Number": 3,
+      "Letter": "B",
+      "Label": "III / Bonds B"
+    },
+    {
+      "ActorId": 7,
+      "Number": 4,
+      "Letter": "A",
+      "Label": "IV / Bonds A"
+    },
+    {
+      "ActorId": 8,
+      "Number": 4,
+      "Letter": "B",
+      "Label": "IV / Bonds B"
+    }
+  ]
+}

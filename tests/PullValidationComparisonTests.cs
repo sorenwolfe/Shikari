@@ -23,6 +23,8 @@ public static class PullValidationComparisonTests
         ReviewedExpectationsAreIndependent();
         InvalidAndIncompleteEvidenceStaysUnknown();
         NoInputMutation();
+        OccurrenceEvidenceDoesNotPoisonOtherWindows();
+        ExactOccurrenceCoverageIsRequired();
         Console.WriteLine("PASS: exact assignment comparisons, timing deltas, recorded navigation separation, local actor and frozen-plan scope, reviewed expectations, ambiguity and incomplete evidence");
     }
 
@@ -73,15 +75,19 @@ public static class PullValidationComparisonTests
     };
 
     private static PullValidationResult With(PullValidationResult source, long? actor = null, string? attempt = null,
-        uint? territory = null, float? duration = null, bool? scope = null)
+        uint? territory = null, float? duration = null, bool? scope = null,
+        bool? occurrenceReadiness = null, bool? evidenceUsable = null)
     {
         var copy = new PullValidationResult
         {
             Plan = source.Plan, ActorId = actor ?? source.ActorId, AttemptId = attempt ?? source.AttemptId,
             TerritoryId = territory ?? source.TerritoryId, Duration = duration ?? source.Duration,
             ScopeVerified = scope ?? source.ScopeVerified, Complete = source.Complete, ActiveRules = source.ActiveRules,
+            HasOccurrenceReadiness = occurrenceReadiness ?? source.HasOccurrenceReadiness,
+            EvidenceUsable = evidenceUsable ?? source.EvidenceUsable,
         };
         copy.Decisions.AddRange(source.Decisions);
+        copy.Occurrences.AddRange(source.Occurrences);
         return copy;
     }
 
@@ -287,5 +293,73 @@ public static class PullValidationComparisonTests
         Check(before == JsonConvert.SerializeObject(new { f.Result, f.Attempt, expected }), "Comparison must not change validation, recording, plan or expectations");
         recordedRows[0].Reason = "UI state"; expectedRows[0].SimulatedSlideId = "UI state";
         Check(before == JsonConvert.SerializeObject(new { f.Result, f.Attempt, expected }), "Returned rows must not expose mutable model references");
+    }
+
+    private static void OccurrenceEvidenceDoesNotPoisonOtherWindows()
+    {
+        foreach (var freshAt in new[] { .1f, 4.1f })
+        {
+            var f = Fixture();
+            f.Attempt.Duration = 8;
+            var rule = f.Attempt.Plan.AdaptiveMechanics[0];
+            rule.WindowSeconds = 3; rule.Branches.RemoveAt(1); rule.Branches[0].AdditionalStatuses.Clear();
+            f.Attempt.Casts.AddRange(new[]
+            {
+                new RecordedCast { Source = "Live", ActionId = 100, Occurrence = 1, StartTime = 0, ObservedTime = 0 },
+                new RecordedCast { Source = "Live", ActionId = 100, Occurrence = 2, StartTime = 4, ObservedTime = 4 },
+            });
+            f.Attempt.Evidence.Statuses.Add(new EvidenceStatus
+            { ActorId = 11, StatusId = 10, Time = freshAt, Change = "apply", Duration = 30, Parameter = 0 });
+            var result = PullValidationRunner.Run(f.Attempt.Plan, f.Attempt, 11, new(777));
+            var expected = new[] { Expected(freshAt < 4 ? 0 : -1), Expected(freshAt > 4 ? 0 : -1, occurrence: 2) };
+            var rows = PullValidationComparison.CompareExpected(result, expected);
+            var observed = freshAt < 4 ? 1 : 2;
+            Check(rows.Count == 2 && rows.Single(r => r.Occurrence == observed).Outcome == PullComparisonOutcome.Matched &&
+                rows.Single(r => r.Occurrence != observed).Outcome == PullComparisonOutcome.Unknown,
+                "A fully observed occurrence must compare independently when the earlier or later acquisition window has missing evidence");
+            f.Attempt.AdaptiveDecisions = result.Decisions.Select(d => new AdaptiveDecision
+            { RuleId = d.RuleId, AnchorActionId = d.AnchorActionId, Occurrence = d.Occurrence, Time = d.Time,
+                BranchIndex = d.BranchIndex, SlideId = d.SlideId, Conflict = d.Conflict }).ToList();
+            rows = PullValidationComparison.CompareRecorded(result, f.Attempt);
+            Check(rows.Count == 2 && rows.Single(r => r.Occurrence == observed).Outcome == PullComparisonOutcome.Matched &&
+                rows.Single(r => r.Occurrence != observed).Outcome == PullComparisonOutcome.Unknown,
+                "Recorded comparisons must use the same occurrence readiness as reviewed expectations");
+        }
+    }
+
+    private static void ExactOccurrenceCoverageIsRequired()
+    {
+        var f = Fixture();
+        f.Result = With(f.Result, occurrenceReadiness: true, evidenceUsable: true);
+        Check(Recorded(f).Outcome == PullComparisonOutcome.Unknown,
+            "A new-format result must not fall back to a complete run flag when the exact occurrence has no coverage entry");
+        f.Result.Occurrences.Add(new PullValidationOccurrence
+        { RuleId = "rule", AnchorActionId = 100, Occurrence = 1, StartTime = 0, Deadline = 10, EndTime = 2, Complete = true });
+        Check(Recorded(f).Outcome == PullComparisonOutcome.Matched,
+            "An exact fully observed occurrence can establish recorded agreement");
+        f.Result.Complete = false;
+        Check(Recorded(f).Outcome == PullComparisonOutcome.Matched,
+            "A whole-run partial summary must not override explicit complete occurrence evidence");
+        f.Result.Occurrences[0].Reasons.Add("Missing observation");
+        Check(Recorded(f).Outcome == PullComparisonOutcome.Unknown,
+            "Unresolved occurrence reasons must gate comparison even if a stale complete flag is true");
+        f.Result.Occurrences[0].Reasons.Clear();
+        f.Result.Occurrences.Add(f.Result.Occurrences[0]);
+        Check(Recorded(f).Outcome == PullComparisonOutcome.Unknown,
+            "Duplicate window identities cannot choose a convenient complete occurrence");
+        f.Result.Occurrences.RemoveAt(1);
+        f.Result.EvidenceUsable = false;
+        Check(Recorded(f).Outcome == PullComparisonOutcome.Unknown &&
+            PullValidationComparison.CompareExpected(f.Result, new[] { Expected() }).Single().Outcome == PullComparisonOutcome.Unknown,
+            "Global source-integrity failures must gate every occurrence comparison");
+        f.Result.EvidenceUsable = true;
+        f.Result.Decisions.Clear();
+        f.Result.Occurrences[0].Complete = false;
+        var row = PullValidationComparison.CompareExpected(f.Result, new[] { Expected() }).Single();
+        Check(row.Outcome == PullComparisonOutcome.Unknown && row.Occurrence == 1,
+            "An unfinished or rearmed window with no decision must remain Unknown rather than Missing");
+        f.Result.Occurrences.Clear(); f.Result.Occurrences.Add(null!);
+        Check(PullValidationComparison.CompareExpected(f.Result, new[] { Expected() }).Single().Outcome == PullComparisonOutcome.Unknown,
+            "A malformed coverage entry must fail closed instead of throwing or passing agreement");
     }
 }

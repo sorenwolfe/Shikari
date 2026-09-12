@@ -46,6 +46,7 @@ public sealed partial class MainWindow
         validationRecordedRows.Clear(); validationExpectedRows.Clear();
         validationExpectedRule = ""; validationExpectedOutcome = -3;
         validationSelectedDecision = null;
+        validationCaseName = ""; validationCaseNote = "";
     }
 
     private PlanDocument? ValidationPlan(ReplayAttempt attempt) => validationCurrentPlan
@@ -53,6 +54,7 @@ public sealed partial class MainWindow
 
     private void AdvancePullValidation()
     {
+        PollValidationCases();
         var attempt = Plugin.Replays.Attempts.FirstOrDefault(a => a.Id == reviewAttemptId);
         var hadInput = pullValidation.Snapshot != null;
         if (validationActorId != 0 && validationActorId != evidenceActor) { InvalidatePullValidation(); return; }
@@ -150,6 +152,7 @@ public sealed partial class MainWindow
                 }
                 DrawPullValidationResult(result);
             }
+            DrawSavedValidationCases(pullValidation.Result);
         }
         ImGui.EndChild();
     }
@@ -166,7 +169,11 @@ public sealed partial class MainWindow
         ImGui.Separator();
         ImGui.TextWrapped($"{result.ActiveRules} eligible rules · {result.ExcludedRules} excluded · {result.Decisions.Count} decisions");
         ImGui.TextColored(Palette.Vec(result.Complete && result.ScopeVerified ? Palette.Good : Palette.Attention),
-            result.Complete && result.ScopeVerified ? "Recording processed; compare assignments below." : "Evidence or encounter scope is incomplete.");
+            result.Complete && result.ScopeVerified ? "Recording processed; compare assignments below." :
+                result.HasOccurrenceReadiness && result.EvidenceUsable && result.ScopeVerified
+                    ? "Some mechanic occurrences have incomplete evidence. See each window below."
+                    : "Evidence or encounter scope is incomplete.");
+        DrawValidationCoverage(result);
         foreach (var notice in result.Notices) ImGui.TextWrapped(notice);
         ImGui.Checkbox("Preview assignment board and cue", ref validationPreview);
         if (validationPreview) DrawValidationPreview(result);
@@ -191,7 +198,7 @@ public sealed partial class MainWindow
         }
         if (ImGui.TreeNode("Reviewed expectations"))
         {
-            ImGui.TextWrapped("Choose the outcome you verified from the strategy and pull. These expectations belong to this player and tested plan for this session; edits or switching players clear them.");
+            ImGui.TextWrapped("Choose the outcome you verified from the strategy and pull. Save a reviewed case below to keep these expectations; otherwise edits or switching players clear them.");
             var rule = result.Plan.AdaptiveMechanics.FirstOrDefault(r => r.Id == validationExpectedRule);
             ImGui.SetNextItemWidth(240 * UiHelpers.Scale);
             if (ImGui.BeginCombo("Expected mechanic", rule?.Label ?? "Choose mechanic"))
@@ -235,6 +242,33 @@ public sealed partial class MainWindow
             DrawValidationComparisons(result, validationExpectedRows);
             ImGui.TreePop();
         }
+    }
+
+    private void DrawValidationCoverage(PullValidationResult result)
+    {
+        if (!result.HasOccurrenceReadiness) return;
+        var usable = result.EvidenceUsable && result.ScopeVerified;
+        var ready = usable ? result.Occurrences.Count(o => o.Complete) : 0;
+        ImGui.TextWrapped($"{ready} of {result.Occurrences.Count} mechanic occurrences have usable evidence.");
+        if (!ImGui.TreeNode("Evidence by mechanic occurrence")) return;
+        for (var i = 0; i < result.Occurrences.Count; i++)
+        {
+            var occurrence = result.Occurrences[i];
+            var rule = result.Plan.AdaptiveMechanics.FirstOrDefault(r => r.Id == occurrence.RuleId);
+            ImGui.PushID("validation-coverage-" + i);
+            ImGui.TextWrapped($"{rule?.Label ?? "Mechanic"} · use {occurrence.Occurrence} · {occurrence.StartTime:0.0}s–{occurrence.EndTime:0.0}s");
+            ImGui.TextColored(Palette.Vec(usable && occurrence.Complete ? Palette.Good : Palette.Attention),
+                usable && occurrence.Complete ? "Evidence ready for comparison" : "Evidence incomplete — outcome remains unknown");
+            foreach (var reason in occurrence.Reasons) ImGui.TextWrapped(reason);
+            if (!usable) ImGui.TextWrapped("The recording's source or encounter scope also needs verification.");
+            if (ImGui.SmallButton("Review this window"))
+            {
+                reviewTime = Math.Clamp(occurrence.StartTime, 0, result.Duration);
+                reviewPlaying = false; validationSelectedDecision = null; validationPreview = false;
+            }
+            ImGui.PopID();
+        }
+        ImGui.TreePop();
     }
 
     private void DrawValidationComparisons(PullValidationResult result, IReadOnlyList<PullComparisonRow> rows)

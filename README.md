@@ -138,7 +138,13 @@ In **Review**, expand **Validate pull** and choose a player. Shikari replays the
 
 Use the plan captured in the recording, or check **Use current plan instead of recorded plan** to try your edits. Disabled rules stay out of the run unless you check **Include disabled rules for testing**; this does not enable them during combat. Press **Validate pull**, then select a simulated decision to jump to that moment. **Preview assignment board and cue** shows its board and assignment text alongside the normal replay controls.
 
-**Compare recorded decisions** checks the original local player's recorded assignments when the tested rules and boards still match. FF Logs does not contain Shikari's own decisions. For either source, **Reviewed expectations** lets you enter an assignment you verified from the strategy and pull, then compare it with the simulation. Expectations stay in this session and clear when the inputs change; unreviewed outcomes remain unknown.
+**Compare recorded decisions** checks the original local player's recorded assignments when the tested rules and boards still match. FF Logs does not contain Shikari's own decisions. For either source, **Reviewed expectations** lets you enter an assignment you verified from the strategy and pull, then compare it with the simulation. Unreviewed outcomes remain unknown.
+
+**Evidence by mechanic occurrence** explains which assignment windows have enough information to compare. A missing status in a later mechanic does not erase an earlier result. If missing evidence from a competing rule could change the outcome, that comparison stays unknown.
+
+To keep your expectations, open **Saved reviewed cases**, enter a name and a note about what you checked, then choose **Save reviewed case**. After reopening Shikari, validate the same recording and player, select your case, and choose **Load reviewed expectations**. Changed rules, boards or evidence need a new review. Saved cases also work with the slower-polling and missing-observation tests. Unsaved expectations clear when the inputs change.
+
+Cases stay on your computer and require the original recording. They do not preserve a replay that retention removes, so keep a copy of recordings you want to use again. A saved case never enables an assignment rule or accepts its own expected answer automatically.
 
 Use **Slower polling** or **Missing observations** to test how rules respond to delayed decisions or a one-second evidence gap. These are synthetic conditions. Missing status history, unknown required values, incomplete windows and unverified encounter identity cannot establish a successful validation. Choosing a test territory selects rules but does not verify the log's encounter.
 

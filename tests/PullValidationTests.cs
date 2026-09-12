@@ -37,6 +37,7 @@ public static class PullValidationTests
     public static void Run()
     {
         ObservationOrdering(); FullPlan(); ArrivalAndRearming(); EvidenceBoundaries(); ScopeAndProvenance(); ImmutabilityAndBounds();
+        OccurrenceReadiness(); ConcurrentReadiness();
         Console.WriteLine("PASS: full-plan chronological rules, conflicts, rearming, availability, gaps, unknown log fields, scope, cancellation and bounded immutable validation");
     }
 
@@ -266,5 +267,131 @@ public static class PullValidationTests
         try { PullValidationRunner.Run(plan, pull, 20, new(1), midRun.Token); }
         catch (OperationCanceledException) { threw = true; }
         Check(threw, "A long valid stream must observe cancellation while preparing or running");
+    }
+
+    private static void OccurrenceReadiness()
+    {
+        var (plan, pull) = Fixture();
+        pull.Duration = 8;
+        pull.Casts.Add(Cast(100, 2, 4, 4));
+        pull.Evidence.Statuses.Add(Status(.1f));
+        var result = Run(plan, pull);
+        Check(result.HasOccurrenceReadiness && result.EvidenceUsable && !result.Complete && result.Occurrences.Count == 2 &&
+            result.Occurrences.Single(o => o.Occurrence == 1).Complete && !result.Occurrences.Single(o => o.Occurrence == 2).Complete,
+            "A missing later window must be explicit without invalidating the source or earlier window");
+        pull.Evidence.Statuses[0].Time = 4.1f;
+        result = Run(plan, pull);
+        Check(!result.Occurrences.Single(o => o.Occurrence == 1).Complete && result.Occurrences.Single(o => o.Occurrence == 2).Complete,
+            "A missing early window must not poison a later fully observed assignment");
+        pull.Evidence.Statuses.Add(Status(3.5f, baseline: true));
+        Check(Run(plan, pull).Occurrences.Single(o => o.Occurrence == 2).Complete,
+            "A baseline between closed and newly armed acquisition windows cannot invalidate the new window");
+
+        (plan, pull) = Fixture(); pull.Duration = 8;
+        pull.Casts.Add(Cast(100, 2, 4, 4));
+        pull.Evidence.Statuses.Add(Status(.1f)); pull.Evidence.Statuses.Add(Status(4.1f));
+        plan.AdaptiveMechanics[0].Branches[0].MinimumSeconds = 20;
+        pull.Evidence.Statuses[0].Duration = null;
+        result = Run(plan, pull);
+        Check(!result.Occurrences[0].Complete && result.Occurrences[1].Complete && result.EvidenceUsable,
+            "An unknown required initial duration must remain local to the occurrence that observed it");
+        pull.Evidence.Statuses[0].Duration = 30;
+        plan.AdaptiveMechanics[0].Branches[0].Parameter = 0;
+        pull.Evidence.Statuses[1].Parameter = null;
+        result = Run(plan, pull);
+        Check(result.Occurrences[0].Complete && !result.Occurrences[1].Complete,
+            "An unknown later status parameter cannot retroactively change early readiness");
+        pull.Evidence.Statuses.Add(Status(float.NaN));
+        Check(!Run(plan, pull).EvidenceUsable, "An event without a usable time must remain a global source-integrity failure");
+
+        (plan, pull) = Fixture(); pull.Duration = .25f;
+        pull.Evidence.Statuses.Add(Status(.1f));
+        result = Run(plan, pull);
+        Check(result.Decisions.Count == 0 && result.Occurrences.Count == 1 && !result.Occurrences[0].Complete &&
+            result.Occurrences[0].EndTime == .25f && result.Occurrences[0].Reasons.Count > 0,
+            "An unfinished arm needs an explicit incomplete window even when the engine emitted no decision");
+        (plan, pull) = Fixture();
+        pull.Casts.Add(Cast(100, 2, .2f, .2f));
+        pull.Evidence.Statuses.Add(Status(.1f)); pull.Evidence.Statuses.Add(Status(.3f));
+        result = Run(plan, pull);
+        Check(result.Occurrences.Count == 2 && !result.Occurrences[0].Complete && result.Occurrences[0].EndTime == .2f &&
+            result.Occurrences[1].Complete && result.Decisions.Single().Occurrence == 2,
+            "Rearming must preserve the abandoned occurrence as unknown while accepting the later fresh assignment");
+
+        (plan, pull) = Fixture(); pull.Duration = 8;
+        pull.Casts.Add(Cast(100, 2, 4, 4));
+        pull.Evidence.Statuses.Add(Status(.1f)); pull.Evidence.Statuses.Add(Status(1.5f)); pull.Evidence.Statuses.Add(Status(4.1f));
+        result = Run(plan, pull, new(1, Scenario: PullValidationScenario.ObservationGap, GapStart: .2f, GapDuration: 1));
+        Check(result.EvidenceUsable && !result.Occurrences[0].Complete && result.Occurrences[1].Complete &&
+            result.Decisions.Single(d => d.Occurrence == 1).SlideId.Length > 0,
+            "Positive evidence after a settling gap may produce a candidate but cannot repair that window; later fresh windows remain usable");
+        result = Run(plan, pull, new(1, Scenario: PullValidationScenario.ObservationGap, GapStart: 4.2f, GapDuration: 1));
+        Check(result.Occurrences[0].Complete && !result.Occurrences[1].Complete,
+            "A gap after an emitted decision cannot be used to retroactively invalidate it");
+        result = Run(plan, pull, new(1, Scenario: PullValidationScenario.ObservationGap, GapStart: 3.2f, GapDuration: .4f));
+        Check(result.Complete, "A gap entirely between finished and fresh future assignment windows must not make those windows unknown");
+
+        (plan, pull) = Fixture();
+        plan.AdaptiveMechanics[0].WindowSeconds = 3.05f;
+        plan.AdaptiveMechanics[0].Branches[0].Parameter = 7;
+        pull.Evidence.Statuses.Add(Status(.1f)); // Known parameter mismatch establishes a no-match window.
+        var lateBaseline = Status(3.07f, baseline: true); lateBaseline.SourceId = 10;
+        pull.Evidence.Statuses.Add(lateBaseline);
+        Check(Run(plan, pull).Complete,
+            "A baseline from an unseen source after acquisition closed must not invalidate a no-match while it awaits the next evaluation poll");
+    }
+
+    private static void ConcurrentReadiness()
+    {
+        var (plan, pull) = Fixture();
+        plan.AdaptiveMechanics.Add(Rule(plan, 200, 11, 1));
+        pull.Casts.Add(Cast(200, 1, 0, 0));
+        pull.Evidence.Statuses.Add(Status(.1f));
+        var result = Run(plan, pull);
+        Check(!result.Occurrences.Single(o => o.AnchorActionId == 100).Complete,
+            "A seemingly complete assignment cannot establish conflict parity while another armed mechanic lacks evidence");
+        pull.Evidence.Statuses.Add(Status(.1f, 11));
+        result = Run(plan, pull);
+        Check(result.Complete && result.Decisions.All(d => d.Conflict),
+            "Both fully observed concurrent mechanics can establish the engine's conflict result");
+        plan.AdaptiveMechanics[1].Branches[0].Parameter = 0;
+        pull.Evidence.Statuses[1].Parameter = null;
+        result = Run(plan, pull);
+        Check(!result.Occurrences.Single(o => o.AnchorActionId == 100).Complete,
+            "An unknown field in a simultaneous competing rule must also invalidate apparent positive output in another rule");
+        pull.Evidence.Statuses[1].Parameter = 0;
+        pull.Casts[1].StartTime = pull.Casts[1].ObservedTime = 2;
+        pull.Evidence.Statuses[1].Time = 2.1f; pull.Evidence.Statuses[1].Parameter = null;
+        result = Run(plan, pull);
+        Check(result.Occurrences.Single(o => o.AnchorActionId == 100).Complete,
+            "A later separately armed competitor must not retroactively invalidate a completed decision");
+        pull.Casts.Add(Cast(100, 1, 1, 1));
+        Check(!Run(plan, pull).EvidenceUsable, "Ambiguous cast identity must still gate the whole run despite occurrence readiness");
+
+        (plan, pull) = Fixture();
+        plan.AdaptiveMechanics[0].Branches.Add(new StatusBranch
+        { StatusId = 11, MinimumSeconds = .15f, MaximumSeconds = .25f, SlideId = plan.Slides[1].Id });
+        plan.AdaptiveMechanics.Add(Rule(plan, 200, 12, 1));
+        pull.Casts.Add(Cast(200, 1, .3f, .3f));
+        pull.Evidence.Statuses.Add(Status(.1f));
+        var uncertainDuration = Status(.1f, 11); uncertainDuration.Duration = null;
+        pull.Evidence.Statuses.Add(uncertainDuration); pull.Evidence.Statuses.Add(Status(.3f, 12));
+        result = Run(plan, pull);
+        Check(result.Decisions.First().AnchorActionId == 100 && !result.Occurrences.Single(o => o.AnchorActionId == 200).Complete,
+            "Unknown duration could delay an earlier candidate's settling and change a subsequent mechanic's conflict outcome before that earlier window expires");
+        uncertainDuration.Duration = .2f;
+        Check(Run(plan, pull).Decisions.All(d => d.Conflict),
+            "A compatible concrete value for that unknown duration must actually change the later conflict outcome in the real engine");
+        uncertainDuration.Duration = null;
+        pull.Casts[1].StartTime = pull.Casts[1].ObservedTime = 4;
+        pull.Evidence.Statuses[2].Time = 4.1f;
+        Check(Run(plan, pull).Occurrences.Single(o => o.AnchorActionId == 200).Complete,
+            "An uncertain completed candidate cannot influence unrelated mechanics after its original assignment window expires");
+        pull.Casts[1].StartTime = pull.Casts[1].ObservedTime = .8f;
+        pull.Evidence.Statuses[2].Time = .9f;
+        pull.Casts.Add(Cast(100, 2, .7f, .7f));
+        pull.Evidence.Statuses.Add(Status(.8f));
+        Check(Run(plan, pull).Occurrences.Single(o => o.AnchorActionId == 200).Complete,
+            "An observed rearm must end the uncertainty carried from a prior occurrence without poisoning the fresh new arm");
     }
 }

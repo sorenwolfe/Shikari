@@ -64,8 +64,13 @@ public static class PullValidationSessionTests
         Check((session.Result != null) == (change == "none"), "A stale or cancelled result was published: " + change);
         if (change == "none")
         {
+            var binding = session.GetType().GetProperty("CaseFingerprint")?.GetValue(session) as string;
+            Check(binding == PullValidationCases.Fingerprint(capturedPlan!, capturedAttempt!, 7, 1),
+                "Saved cases must bind to the detached inputs used by the worker, not newer edits");
             session.Poll(plan, attempt, 5, 8, true);
             Check(session.Result == null, "Editing after completion must clear the old result");
+            Check(session.GetType().GetProperty("CaseFingerprint")?.GetValue(session) as string == "",
+                "A stale result must discard its saved-case binding");
         }
     }
 }

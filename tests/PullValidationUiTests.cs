@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Numerics;
 using System.Threading;
 using Newtonsoft.Json;
@@ -15,6 +16,7 @@ namespace Dalamud.Bindings.ImGui
         private static readonly Stack<bool> disabledScopes = new();
         public static readonly HashSet<string> Clicks = new();
         public static readonly List<string> Text = new();
+        public static readonly Dictionary<string, string> Inputs = new();
         public static bool CollapsingHeader(string s) => true;
         public static bool TreeNode(string s) => true;
         public static void TreePop() { }
@@ -27,6 +29,10 @@ namespace Dalamud.Bindings.ImGui
         public static bool Selectable(string s, bool selected = false) => Button(s);
         public static bool Checkbox(string s, ref bool value) { if (!Button(s)) return false; value = !value; return true; }
         public static bool InputInt(string s, ref int v) => false;
+        public static bool InputTextWithHint(string label, string hint, ref string value, uint length)
+        { if (!Inputs.Remove(label, out var entered)) return false; value = entered; return true; }
+        public static bool InputTextMultiline(string label, ref string value, uint length, Vector2 size)
+            => InputTextWithHint(label, "", ref value, length);
         public static bool SliderFloat(string s, ref float v, float min, float max, string format) => false;
         public static void SameLine() { }
         public static void Separator() { }
@@ -50,6 +56,12 @@ namespace Shikari
         public static TestEncounter Encounter = new();
         public static TestReplays Replays = new();
         public static TestConfig Config = new();
+        public static TestInterface PluginInterface = new();
+    }
+    public sealed class TestInterface
+    {
+        public readonly string Directory = Path.Combine(Path.GetTempPath(), "Shikari-validation-ui-" + Guid.NewGuid().ToString("N"));
+        public string GetPluginConfigDirectory() => Directory;
     }
     public sealed class TestConfig { public uint ThemeAccent; }
     public sealed class TestEncounter { public bool InCombat; }
@@ -96,6 +108,8 @@ namespace Shikari.UI
             w.reviewTime = 3; w.validationPreview = true;
             w.DrawPullValidation(a);
             Check(ArenaCanvas.Draws > 0 && ImGui.Text.Exists(t=>t.Contains("North tower")), "Review must preview tested assignment board and cue");
+            Check(ImGui.Text.Contains("1 of 1 mechanic occurrences have usable evidence."),
+                "Review must show occurrence coverage instead of only a whole-pull flag");
             Check(JsonConvert.SerializeObject(a)==original && !w.reviewPlaying && w.reviewSeat == -1, "Validation changed source plan, playback or active seat");
             var decision = w.pullValidation.Result!.Decisions[0];
             w.pullValidation.Result.Decisions.Add(new AdaptiveDecision { Time=decision.Time, Mechanic="Second rule", Occurrence=1, Reason="Timed out" });
@@ -109,6 +123,17 @@ namespace Shikari.UI
             ImGui.Clicks.Add("Add reviewed expectation"); w.DrawPullValidation(a);
             Check(w.validationExpected.Count == 1 && w.validationExpectedRows.Exists(r=>r.Outcome == PullComparisonOutcome.Matched),
                 "A reviewed user expectation must reach the comparison service");
+            ImGui.Inputs["Case name##validation"] = "Reviewed north assignment";
+            ImGui.Inputs["Review note##validation"] = "Checked the strategy and this player's observed buff pair.";
+            ImGui.Clicks.Add("Save reviewed case");
+            var caseFile = Path.Combine(Plugin.PluginInterface.Directory, "validation-cases", "pull-validation-cases.json");
+            Check(SpinWait.SpinUntil(() => { w.DrawPullValidation(a); return File.Exists(caseFile); }, 5000),
+                "The explicit Save reviewed case control must persist reviewed expectations locally");
+            ImGui.Clicks.Add("Clear expectations"); w.DrawPullValidation(a);
+            Check(w.validationExpected.Count == 0, "Clearing working expectations must not silently reload a saved answer");
+            ImGui.Clicks.Add("Load reviewed expectations");
+            Check(SpinWait.SpinUntil(() => { w.DrawPullValidation(a); return w.validationExpected.Count == 1; }, 5000),
+                "The saved case must explicitly reload its compatible reviewed expectations");
             w.InvalidatePullValidation();
             Check(w.pullValidation.Result == null && w.validationExpected.Count == 0, "Edits must clear validation and its bound expectations");
             Plugin.Encounter.InCombat=true;
@@ -116,7 +141,32 @@ namespace Shikari.UI
             Check(!w.pullValidation.Running && w.pullValidation.Result == null, "Combat must disable validation start");
             Plugin.Encounter.InCombat=false; ImGui.Clicks.Clear();
             w.pullValidation.Dispose();
-            Console.WriteLine("PASS: real Review validation controls, detached engine run, board/cue preview, read-only source and edit/combat guards");
+            w.validationCaseStore?.Dispose();
+            // ReplayStore uses compact persistence; session-only canvas and roster IDs regenerate on restart.
+            a = JsonConvert.DeserializeObject<ReplayAttempt>(JsonConvert.SerializeObject(a, Shikari.Services.PlanJson.Compact()),
+                Shikari.Services.PlanJson.Compact())!;
+            p = a.Plan; Plugin.Replays.Attempts[0] = a;
+            var reopened = new MainWindow { Plan=p, reviewAttemptId=a.Id };
+            ImGui.Clicks.Add("Validate pull"); reopened.DrawPullValidation(a);
+            Check(SpinWait.SpinUntil(() => {
+                reopened.AdvancePullValidation(); reopened.DrawPullValidation(a);
+                return reopened.pullValidation.Result != null && reopened.validationCaseStore?.Items.Count == 1;
+            }, 5000), "Reopening Review must retain the durable case and rerun its recording");
+            Check(reopened.validationExpected.Count == 0, "Reopening must not accept saved expectations automatically");
+            reopened.validationCaseSelection = reopened.validationCaseStore!.Items[0].Id;
+            ImGui.Clicks.Add("Load reviewed expectations"); reopened.DrawPullValidation(a);
+            Check(reopened.validationExpected.Count == 1 && reopened.validationExpectedRows.Exists(r=>r.Outcome == PullComparisonOutcome.Matched),
+                "A compatible case must load after a new Review instance is created");
+            a.Evidence.Statuses[0].Time += .1f;
+            reopened.InvalidatePullValidation(); ImGui.Clicks.Add("Validate pull"); reopened.DrawPullValidation(a);
+            Check(SpinWait.SpinUntil(() => { reopened.AdvancePullValidation(); return !reopened.pullValidation.Running; }, 5000),
+                "The edited evidence run did not settle");
+            ImGui.Clicks.Add("Load reviewed expectations"); ImGui.Text.Clear(); reopened.DrawPullValidation(a);
+            Check(reopened.validationExpected.Count == 0 && ImGui.Text.Exists(t=>t.Contains("different inputs")),
+                "A case from before an evidence edit must be visibly incompatible and cannot load");
+            ImGui.Clicks.Clear(); reopened.pullValidation.Dispose(); reopened.validationCaseStore?.Dispose();
+            File.Delete(caseFile); Directory.Delete(Path.GetDirectoryName(caseFile)!); Directory.Delete(Plugin.PluginInterface.Directory);
+            Console.WriteLine("PASS: actual Review controls, occurrence coverage, board/cue preview, durable case save/reopen/explicit load, input incompatibility and combat guards");
         }
     }
 }
