@@ -150,6 +150,16 @@ Use **Slower polling** or **Missing observations** to test how rules respond to 
 
 This checks assignment decisions. The cue is a preview that assumes following is enabled; it does not replay manual holds, timeline reminder delivery, or Ember's full behavior. A matching assignment or player position does not prove that the mechanic succeeded.
 
+### Check a position at the mechanic's snapshot
+
+After validating a pull, open **Check destination at a mechanic checkpoint** and select an assignment. Choose the player's recorded effect by name or action ID, or enter a checkpoint time you verified. The replay pauses at the chosen checkpoint. **Check position** compares the recorded position with that player's token on the assigned board.
+
+For FF Logs, add at least three well-spread arena landmarks under **Position alignment**, then validate again. Use landmarks you can identify in both the log and the board; a player's example spot is not a landmark. Check the checkpoint and alignment confirmation boxes once you have reviewed them. Local recordings use their captured board alignment.
+
+Results are **Near**, **Away**, or **Unknown**, with the sample time, distance and alignment information. A missing or old sample stays unknown; Shikari never fills the gap with a future position. The comparison radius is a percentage of the board. These checks stay in Review and clear when their inputs change.
+
+New FF Logs imports retain calculated-damage positions separately from the later damage events, which can show a player who has already moved. Reimport an older fight to add this information. For the documented M12S Act 2 towers, Review can also show the player's measured distance from that tower's recorded center. This does not establish that they took the correct tower, followed a safe route, or resolved the mechanic successfully.
+
 New local recordings also retain readable party buffs, debuffs, and positions, so you can inspect your own pulls through the same controls. Older recordings keep their existing playback but won't gain status history retroactively. Unknown status parameters stay unknown; incomplete log imports can be inspected but can't generate rules.
 
 Rule drafts use observed status durations with a two-second margin. Review those ranges for mechanics where timer lengths determine the assignment. Sharing sends the plan's rules and compact strategy references, while full replay files stay local.

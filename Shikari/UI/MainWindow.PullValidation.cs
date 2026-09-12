@@ -42,6 +42,7 @@ public sealed partial class MainWindow
 
     private void ClearValidationComparisons()
     {
+        ResetPositionCheck();
         validationExpected.Clear(); validationCompared = null;
         validationRecordedRows.Clear(); validationExpectedRows.Clear();
         validationExpectedRule = ""; validationExpectedOutcome = -3;
@@ -61,6 +62,8 @@ public sealed partial class MainWindow
         pullValidation.Poll(attempt == null ? null : ValidationPlan(attempt), attempt, validationEditRevision,
             Plugin.Replays.EvidenceRevision, !Plugin.Encounter.InCombat);
         if (hadInput && pullValidation.Snapshot == null) ClearValidationComparisons();
+        positionCheck.Poll(pullValidation.Result, positionDecision, attempt, PositionOptions(), validationEditRevision,
+            Plugin.Replays.EvidenceRevision, !Plugin.Encounter.InCombat);
     }
 
     private void DrawPullValidation(ReplayAttempt attempt)
@@ -151,8 +154,10 @@ public sealed partial class MainWindow
                     validationExpectedRows = PullValidationComparison.CompareExpected(result, validationExpected);
                 }
                 DrawPullValidationResult(result);
+                DrawPositionCheck(result, attempt);
             }
             DrawSavedValidationCases(pullValidation.Result);
+            DrawPositionCalibration(attempt);
         }
         ImGui.EndChild();
     }
@@ -307,6 +312,7 @@ public sealed partial class MainWindow
         reviewTime = Math.Clamp(decision.Time, 0, result.Duration);
         reviewPlaying = false; validationPreview = true;
         validationSelectedDecision = decision; validationSelectedTime = reviewTime;
+        SelectPositionDecision(result, decision);
     }
 
     private void DrawValidationPreview(PullValidationResult result)

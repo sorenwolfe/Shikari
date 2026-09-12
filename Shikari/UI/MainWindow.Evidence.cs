@@ -281,14 +281,14 @@ public sealed partial class MainWindow
         evidenceMessage = "Cast linked to the chosen slide. Review its timeline settings before enabling.";
     }
 
-    private void SaveEvidenceEdits(ReplayAttempt attempt)
+    private void SaveEvidenceEdits(ReplayAttempt attempt, bool enrichStrategy = true)
     {
         // Metadata has already changed in memory, even if validation or disk save later fails.
         InvalidateAssignmentCoverage();
         InvalidatePullValidation();
         try
         {
-            if (Plan?.Id == attempt.Plan.Id && !Plugin.Encounter.InCombat)
+            if (enrichStrategy && Plan?.Id == attempt.Plan.Id && !Plugin.Encounter.InCombat)
             {
                 var result = new StrategyMergeSession(Plan).Apply(Plan, attempt, Plugin.Plans.SaveActive);
                 evidenceMessage = result.Summary;

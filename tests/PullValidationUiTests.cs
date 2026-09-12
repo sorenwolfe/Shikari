@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
+using System.Linq;
 using System.Numerics;
 using System.Threading;
 using Newtonsoft.Json;
@@ -17,6 +19,11 @@ namespace Dalamud.Bindings.ImGui
         public static readonly HashSet<string> Clicks = new();
         public static readonly List<string> Text = new();
         public static readonly Dictionary<string, string> Inputs = new();
+        public static readonly HashSet<string> OpenCombos = new();
+        public static readonly Dictionary<string, int> ComboChoices = new();
+        public static readonly List<string> Options = new();
+        private static string activeCombo = "";
+        private static int comboIndex;
         public static bool CollapsingHeader(string s) => true;
         public static bool TreeNode(string s) => true;
         public static void TreePop() { }
@@ -24,11 +31,22 @@ namespace Dalamud.Bindings.ImGui
         public static bool BeginChild(string s, Vector2 size, bool border, ImGuiWindowFlags flags) => true;
         public static void EndChild() { }
         public static void SetNextItemWidth(float v) { }
-        public static bool BeginCombo(string label, string preview) => false;
-        public static void EndCombo() { }
-        public static bool Selectable(string s, bool selected = false) => Button(s);
+        public static bool BeginCombo(string label, string preview)
+        { if (!OpenCombos.Remove(label)) return false; activeCombo = label; comboIndex = 0; return true; }
+        public static void EndCombo() { activeCombo = ""; }
+        public static bool Selectable(string s, bool selected = false)
+        {
+            Options.Add(s);
+            if (activeCombo != "" && ComboChoices.TryGetValue(activeCombo, out var pick) && comboIndex++ == pick && disabled == 0)
+            { ComboChoices.Remove(activeCombo); return true; }
+            return Button(s);
+        }
         public static bool Checkbox(string s, ref bool value) { if (!Button(s)) return false; value = !value; return true; }
         public static bool InputInt(string s, ref int v) => false;
+        public static bool InputFloat(string s, ref float v, float step = 0, float stepFast = 0, string format = "%.3f")
+        { if (disabled != 0 || !Inputs.Remove(s, out var value)) return false; v = float.Parse(value, CultureInfo.InvariantCulture); return true; }
+        public static bool InputFloat2(string s, ref Vector2 v, string format = "%.3f")
+        { if (disabled != 0 || !Inputs.Remove(s, out var value)) return false; var parts = value.Split(','); v = new(float.Parse(parts[0], CultureInfo.InvariantCulture), float.Parse(parts[1], CultureInfo.InvariantCulture)); return true; }
         public static bool InputTextWithHint(string label, string hint, ref string value, uint length)
         { if (!Inputs.Remove(label, out var entered)) return false; value = entered; return true; }
         public static bool InputTextMultiline(string label, ref string value, uint length, Vector2 size)
@@ -67,15 +85,35 @@ namespace Shikari
     public sealed class TestEncounter { public bool InCombat; }
     public sealed class TestReplays { public long EvidenceRevision; public List<ReplayAttempt> Attempts = new(); }
 }
+namespace Shikari.Services.Live
+{
+    public static class ArenaTracker
+    {
+        public readonly record struct LivePlayer(string Name, uint JobId, int SlotIndex, Vector2 Board, bool IsLocal);
+    }
+}
 namespace Shikari.UI
 {
     public static class UiHelpers { public static float Scale => 1; }
     public sealed class ArenaCanvas
     {
         public static int Draws;
+        public static int ObservedDraws;
         public int HighlightSlot { get; set; }
         public bool FocusOnMe { get; set; }
-        public void Draw(PlanDocument p, Slide s, Vector2 size, bool editable) { if(editable || size.X <= 0 || size.Y <= 0) throw new Exception("Validation canvas is editable or has no size"); Draws++; }
+        public bool LiveGuides { get; set; }
+        public IReadOnlyList<Shikari.Services.Live.ArenaTracker.LivePlayer>? LivePlayers { get; set; }
+        public void Draw(PlanDocument p, Slide s, Vector2 size, bool editable)
+        {
+            if(editable || size.X <= 0 || size.Y <= 0) throw new Exception("Validation canvas is editable or has no size");
+            Draws++;
+            if(LivePlayers?.Count > 0)
+            {
+                if(LiveGuides || LivePlayers.Any(player=>player.IsLocal))
+                    throw new Exception("Recorded position preview must not enable live guides or settled-player feedback.");
+                ObservedDraws++;
+            }
+        }
     }
     public sealed partial class MainWindow
     {
@@ -85,6 +123,11 @@ namespace Shikari.UI
         private bool reviewPlaying;
         private int reviewSeat = -1;
         private long evidenceActor;
+        private void SaveEvidenceEdits(ReplayAttempt attempt, bool enrichStrategy = true)
+        {
+            if(enrichStrategy) throw new Exception("Position calibration must save evidence without enriching the live strategy.");
+            InvalidatePullValidation(); Plugin.Replays.EvidenceRevision++;
+        }
         private void TimelineFor(ReplayAttempt a) { if(evidenceActor == 0) evidenceActor = a.Evidence.Actors[0].Id; }
         public static void RunValidationUiTests()
         {
@@ -166,7 +209,84 @@ namespace Shikari.UI
                 "A case from before an evidence edit must be visibly incompatible and cannot load");
             ImGui.Clicks.Clear(); reopened.pullValidation.Dispose(); reopened.validationCaseStore?.Dispose();
             File.Delete(caseFile); Directory.Delete(Path.GetDirectoryName(caseFile)!); Directory.Delete(Plugin.PluginInterface.Directory);
-            Console.WriteLine("PASS: actual Review controls, occurrence coverage, board/cue preview, durable case save/reopen/explicit load, input incompatibility and combat guards");
+            RunPositionUiTests();
+            Console.WriteLine("PASS: actual Review controls, occurrence coverage, board/cue preview, durable cases, exact position-check selection and publication, input incompatibility and combat guards");
+        }
+
+        private static void RunPositionUiTests()
+        {
+            static void Check(bool c, string message) { if (!c) throw new Exception(message); }
+            ImGui.Clicks.Clear(); ImGui.Inputs.Clear(); ImGui.Text.Clear(); ImGui.Options.Clear();
+            var plan = PlanDocument.CreateDefault("Reviewed board", 2);
+            plan.Slides[0].Id = "assigned";
+            plan.Slides[0].Items.Add(new CanvasItem { Kind=CanvasItemKind.PlayerToken, SlotIndex=0, Position=new(.5f,.5f) });
+            plan.AdaptiveMechanics.Add(new() { Id="position-rule", Label="Destination assignment", Enabled=true, TerritoryId=1, AnchorActionId=123, WindowSeconds=4,
+                Branches=new() { new() { StatusId=10, MaximumSeconds=3600, SlideId="assigned", Label="Reviewed north spot" } } });
+            var attempt = new ReplayAttempt { Id="position-pull", Plan=plan, Duration=8, TerritoryId=1,
+                Casts=new() { new() { Source="FF Logs", ActionId=123, Occurrence=1, StartTime=1, ObservedTime=1 } },
+                Evidence=new() { Source="FF Logs", Complete=true, EffectsComplete=true, CalibrationSlideId="assigned",
+                    Actors=new() { new() { Id=7, SlotIndex=0, Name="Selected player" }, new() { Id=8, SlotIndex=1, Name="Other player" } },
+                    Statuses=new() { new() { ActorId=7, StatusId=10, Time=2 } },
+                    Positions=new() { new() { ActorId=7, Time=3, Position=new(30,-30) } },
+                    References=new() { new() { Source=new(0,0), Board=new(.2f,.2f) }, new() { Source=new(40,0), Board=new(.2f,.6f) }, new() { Source=new(0,-40), Board=new(.6f,.2f) } },
+                    Effects=new() {
+                        new() { Time=3, ActionId=200, SourceId=99, TargetId=8, Type="calculateddamage", Name="Other player's event", TargetPosition=new(0,0) },
+                        new() { Time=3, ActionId=200, SourceId=99, TargetId=7, Type="calculateddamage", Name="Selected calculated event", TargetPosition=new(30,-30) },
+                        new() { Time=3.3f, ActionId=200, SourceId=99, TargetId=7, Type="damage", Name="Delayed damage event", TargetPosition=new(0,0) },
+                    } } };
+            Plugin.Replays.Attempts.Clear(); Plugin.Replays.Attempts.Add(attempt);
+            var window = new MainWindow { Plan=plan, reviewAttemptId=attempt.Id, evidenceActor=7 };
+            ImGui.Clicks.Add("Validate pull"); window.DrawPullValidation(attempt);
+            Check(SpinWait.SpinUntil(() => { window.AdvancePullValidation(); return !window.pullValidation.Running; },5000), "Position UI assignment validation did not complete.");
+            var assignments = window.pullValidation.Result!;
+            Check(assignments?.Decisions.Count==1, "Position UI needs a production-engine assignment.");
+            var decision = assignments!.Decisions[0];
+            window.SelectPositionDecision(assignments,decision); window.DrawPositionCheck(assignments,attempt);
+            Check(window.positionEffectIndex == -1 && window.positionCheck.Result == null, "Position UI must not silently choose the first effect or start a check.");
+            ImGui.OpenCombos.Add("Effect##position"); window.DrawPositionCheck(assignments,attempt);
+            Check(ImGui.Options.Any(o => o.Contains("Selected calculated event")) &&
+                !ImGui.Options.Any(o => o.Contains("Other player's event") || o.Contains("Delayed damage event")),
+                "Effect options must offer only the chosen player's exact calculated events.");
+            ImGui.OpenCombos.Add("Effect##position"); ImGui.ComboChoices["Effect##position"] = 0; window.DrawPositionCheck(assignments,attempt);
+            Check(window.positionEffectIndex == 1, "Choosing the offered event must preserve its exact source index.");
+            ImGui.Clicks.Add("I verified this mechanic checkpoint"); ImGui.Clicks.Add("I reviewed this board’s alignment"); window.DrawPositionCheck(assignments,attempt);
+            var before = JsonConvert.SerializeObject(attempt); var observedBefore = ArenaCanvas.ObservedDraws;
+            ImGui.Clicks.Add("Check position"); window.DrawPositionCheck(assignments,attempt);
+            Check(SpinWait.SpinUntil(() => { window.AdvancePullValidation(); window.DrawPositionCheck(assignments,attempt); return !window.positionCheck.Running; },5000), "Check position did not publish.");
+            Check(window.positionCheck.Result?.Outcome==PositionCheckOutcome.Near && window.positionCheck.Result.SampleTime==3,
+                "Actual Check position control must publish the production evaluator's exact-event observation.");
+            Check(ArenaCanvas.ObservedDraws > observedBefore && JsonConvert.SerializeObject(attempt)==before,
+                "Position preview must draw the observed marker read-only without changing the recording.");
+            ImGui.Clicks.Add("Use a recorded effect checkpoint"); window.DrawPositionCheck(assignments,attempt);
+            Check(window.positionCheck.Result == null, "Switching checkpoint source must invalidate an old verdict.");
+            ImGui.Inputs["Checkpoint time (seconds)"] = "3.1"; window.DrawPositionCheck(assignments,attempt);
+            Check(window.positionTime==3.1f && window.positionCheck.Result==null, "Editing checkpoint time must not retain previous results.");
+            window.positionCheckpointReviewed = true; window.positionAlignmentReviewed = true;
+            Plugin.Encounter.InCombat = true; ImGui.Clicks.Add("Check position"); window.DrawPositionCheck(assignments,attempt);
+            Check(!window.positionCheck.Running && window.positionCheck.Result==null, "Combat must disable position checks.");
+            Plugin.Encounter.InCombat = false; ImGui.Clicks.Clear();
+            ImGui.Clicks.Add("Check position"); window.DrawPositionCheck(assignments,attempt);
+            Check(SpinWait.SpinUntil(() => { window.AdvancePullValidation(); window.DrawPositionCheck(assignments,attempt); return !window.positionCheck.Running; },5000) && window.positionCheck.Result != null,
+                "Reviewed manual checkpoints must reach the passive evaluator.");
+            ImGui.Inputs["Checkpoint time (seconds)"] = "3.15"; window.DrawPositionCheck(assignments,attempt);
+            Check(window.positionCheck.Result==null && !window.positionCheckpointReviewed,
+                "Editing a completed manual checkpoint must clear both its result and its review acknowledgement.");
+            window.positionCheckpointReviewed=true; ImGui.Clicks.Add("Check position"); window.DrawPositionCheck(assignments,attempt);
+            Check(SpinWait.SpinUntil(() => { window.AdvancePullValidation(); window.DrawPositionCheck(assignments,attempt); return !window.positionCheck.Running; },5000) && window.positionCheck.Result != null,
+                "The replacement reviewed checkpoint must publish before testing calibration invalidation.");
+            var previousRevision = Plugin.Replays.EvidenceRevision;
+            ImGui.Inputs["Landmark source X / Y"] = "40,-40"; ImGui.Inputs["Landmark board X / Y"] = "0.6,0.6";
+            ImGui.Clicks.Add("Add alignment landmark"); window.DrawPositionCalibration(attempt);
+            Check(window.positionCheck.Result==null && window.positionDecision==null && !window.positionAlignmentReviewed,
+                "Calibration/evidence edits must invalidate position results and review acknowledgements.");
+            Check(attempt.Evidence.References.Count==4 && attempt.Evidence.References[3].Source==new Vector2(40,-40) &&
+                attempt.Evidence.References[3].Board==new Vector2(.6f,.6f) && Plugin.Replays.EvidenceRevision>previousRevision,
+                "Alignment controls must save the exact user-entered landmark and invalidate evidence revision.");
+            Plugin.Encounter.InCombat=true; ImGui.Clicks.Add("Clear position alignment"); window.DrawPositionCalibration(attempt);
+            Check(attempt.Evidence.References.Count==4, "Combat must disable alignment edits.");
+            Plugin.Encounter.InCombat=false; ImGui.Clicks.Clear();
+            window.positionCheck.Dispose(); window.pullValidation.Dispose(); window.validationCaseStore?.Dispose();
+            ImGui.Clicks.Clear(); ImGui.Inputs.Clear(); ImGui.OpenCombos.Clear(); ImGui.ComboChoices.Clear();
         }
     }
 }

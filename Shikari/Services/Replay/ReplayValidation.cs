@@ -21,9 +21,9 @@ public static class ReplayValidation
             attempt.Plan.Slides.Any(s => !SlideMetadataValidation.IsValid(s) || s.Items.Any(i => !SymbolValidation.IsValid(i)))) return false;
         var last = -1f;
         var evidence = attempt.Evidence;
-        if (evidence == null || evidence.Actors == null || evidence.Statuses == null || evidence.Positions == null ||
+        if (evidence == null || evidence.Actors == null || evidence.Statuses == null || evidence.Positions == null || evidence.Effects == null ||
             evidence.References == null || evidence.Warnings == null || evidence.Actors.Count > 32 ||
-            evidence.Statuses.Count > ReplayEvidence.MaxStatuses || evidence.Positions.Count > ReplayEvidence.MaxPositions ||
+            evidence.Statuses.Count > ReplayEvidence.MaxStatuses || evidence.Positions.Count > ReplayEvidence.MaxPositions || evidence.Effects.Count > ReplayEvidence.MaxEffects ||
             evidence.References.Count > 8 || evidence.Warnings.Count > 100 ||
             evidence.Actors.Any(a => a == null || a.Id <= 0 || a.Name == null || a.Name.Length > 256 || a.SlotIndex < -1 || a.SlotIndex >= attempt.Plan.Roster.Count ||
                 a.GameObjectId != null && (evidence.Source != "Local recording" || !EvidenceActorIdentity.IsLiveEntityId(a.Id) ||
@@ -36,6 +36,13 @@ public static class ReplayValidation
                 p.ActorId <= 0 || !float.IsFinite(p.Position.X) || !float.IsFinite(p.Position.Y)) ||
             evidence.References.Any(r => r == null || !float.IsFinite(r.Source.X) || !float.IsFinite(r.Source.Y) ||
                 !float.IsFinite(r.Board.X) || !float.IsFinite(r.Board.Y))) return false;
+        var evidenceActors = evidence.Actors.Select(a => a.Id).ToHashSet();
+        if (evidence.Effects.Any(e => e == null || !float.IsFinite(e.Time) || e.Time < 0 || e.Time > attempt.Duration ||
+                e.ActionId == 0 || e.SourceId <= 0 || !evidenceActors.Contains(e.TargetId) ||
+                e.Type is not ("calculateddamage" or "damage") || e.Name == null || e.Name.Length > 256 ||
+                e.SourceInstance is <= 0 || e.TargetInstance is <= 0 || e.PacketId is < 0 ||
+                e.SourcePosition is { } sourcePosition && (!float.IsFinite(sourcePosition.X) || !float.IsFinite(sourcePosition.Y)) ||
+                e.TargetPosition is { } targetPosition && (!float.IsFinite(targetPosition.X) || !float.IsFinite(targetPosition.Y)))) return false;
         if (attempt.StatusObservations == null || attempt.AdaptiveDecisions == null ||
             attempt.StatusObservations.Count > 4096 || attempt.AdaptiveDecisions.Count > 1024 ||
             attempt.StatusObservations.Any(s => s == null || !float.IsFinite(s.Time) || s.Time < 0 || s.Time > attempt.Duration ||

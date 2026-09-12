@@ -367,6 +367,7 @@ public sealed partial class MainWindow : Window, IDisposable
         Plugin.Encounter.CombatStarted -= InvalidatePullValidation;
         CancelAssignmentCheck();
         pullValidation.Dispose();
+        positionCheck.Dispose();
         validationCaseStore?.Dispose();
         DisposeWtfDig();
         DisposeImport();

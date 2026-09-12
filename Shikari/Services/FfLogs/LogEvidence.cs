@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Numerics;
 
 namespace Shikari.Services.FfLogs;
 
@@ -10,8 +11,28 @@ public sealed class LogEvidence
 {
     public List<LogStatusEvent> StatusEvents { get; init; } = new();
     public List<LogPosition> Positions { get; init; } = new();
+    public List<LogEffectEvent> Effects { get; init; } = new();
+    /// <summary>The optional typed-effect channel was read without omissions. Legacy evidence is unknown.</summary>
+    public bool EffectsComplete { get; set; }
     public List<string> Warnings { get; init; } = new();
     public bool Complete { get; set; } = true;
+}
+
+/// <summary>A typed damage observation; calculateddamage and damage are separate timestamps,
+/// not inferred mechanic resolutions. Positions remain raw FF Logs centicoordinates.</summary>
+public sealed class LogEffectEvent
+{
+    public float Time { get; init; }
+    public uint ActionId { get; init; }
+    public string Name { get; init; } = "";
+    public string Type { get; init; } = "";
+    public long SourceId { get; init; }
+    public long TargetId { get; init; }
+    public int? SourceInstance { get; init; }
+    public int? TargetInstance { get; init; }
+    public long? PacketId { get; init; }
+    public Vector2? SourcePosition { get; init; }
+    public Vector2? TargetPosition { get; init; }
 }
 
 public sealed class LogStatusEvent

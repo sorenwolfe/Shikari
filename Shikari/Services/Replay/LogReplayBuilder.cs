@@ -24,6 +24,7 @@ public static class LogReplayBuilder
         evidence.FightId = data.Fight.Id;
         evidence.EncounterId = data.Fight.EncounterId;
         evidence.Complete = source.Complete;
+        evidence.EffectsComplete = source.EffectsComplete && source.Complete;
         evidence.Warnings.AddRange(source.Warnings.Take(90));
         var participating = source.StatusEvents.Select(e => e.TargetId).Concat(source.Positions.Select(e => e.ActorId))
             .Concat(data.PlayerCasts.Select(c => c.SourceId)).ToHashSet();
@@ -39,6 +40,22 @@ public static class LogReplayBuilder
         foreach (var group in evidence.Actors.Where(a => a.SlotIndex >= 0).GroupBy(a => a.SlotIndex).Where(g => g.Count() > 1))
             foreach (var actor in group) actor.SlotIndex = -1;
         var actorIds = evidence.Actors.Select(a => a.Id).ToHashSet();
+        // The effect channel adds no roster members. Only targets already established as
+        // participating players can become position-check evidence; enemy identity is retained.
+        foreach (var item in source.Effects.Where(e => actorIds.Contains(e.TargetId)).OrderBy(e => e.Time))
+        {
+            if (evidence.Effects.Count >= ReplayEvidence.MaxEffects)
+            {
+                evidence.EffectsComplete = false;
+                const string warning = "Typed damage observations exceeded the recording limit; the effect channel is incomplete.";
+                if (!evidence.Warnings.Contains(warning)) evidence.Warnings.Add(warning);
+                break;
+            }
+            evidence.Effects.Add(new EvidenceEffect { Time = item.Time, ActionId = item.ActionId,
+                Name = item.Name, Type = item.Type, SourceId = item.SourceId, TargetId = item.TargetId,
+                SourceInstance = item.SourceInstance, TargetInstance = item.TargetInstance, PacketId = item.PacketId,
+                SourcePosition = item.SourcePosition, TargetPosition = item.TargetPosition });
+        }
         foreach (var item in source.StatusEvents.Where(s => actorIds.Contains(s.TargetId)).OrderBy(s => s.Time))
         {
             if (evidence.Statuses.Count == ReplayEvidence.MaxStatuses) { evidence.Complete = false; break; }

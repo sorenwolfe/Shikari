@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Numerics;
 using System.Threading;
 using Newtonsoft.Json.Linq;
 
@@ -9,10 +10,11 @@ namespace Shikari.Services.FfLogs;
 /// <summary>Normalizes FF Logs JSON without turning absent fields into measured zero values.</summary>
 public sealed class LogEvidenceParser
 {
+    private const int MaxEffects = 32768;
     private readonly LogFight fight;
     private readonly IReadOnlyDictionary<uint, string> abilityNames;
     private readonly HashSet<(float Time, int Actor, float X, float Y)> positions = new();
-    public LogEvidence Result { get; } = new();
+    public LogEvidence Result { get; } = new() { EffectsComplete = true };
 
     public LogEvidenceParser(LogFight fight, IReadOnlyDictionary<uint, string>? abilityNames = null)
     {
@@ -23,7 +25,7 @@ public sealed class LogEvidenceParser
     public void Warn(string warning, bool incomplete = false)
     {
         if (!Result.Warnings.Contains(warning)) Result.Warnings.Add(warning);
-        if (incomplete) Result.Complete = false;
+        if (incomplete) { Result.Complete = false; Result.EffectsComplete = false; }
     }
 
     public void AddPage(JArray rows, CancellationToken cancel = default)
@@ -41,6 +43,7 @@ public sealed class LogEvidenceParser
             AddPosition(row, "source", time);
             AddPosition(row, "target", time);
             var type = row["type"]?.Type == JTokenType.String ? row.Value<string>("type") : null;
+            if (type is "calculateddamage" or "damage") AddEffect(row, time, type);
             if (type == "combatantinfo")
             {
                 var actor = Integer(row["sourceID"], 1, int.MaxValue);
@@ -61,6 +64,71 @@ public sealed class LogEvidenceParser
             if (change.HasValue) AddStatus(row, time, change.Value, null, false);
         }
     }
+
+    private void AddEffect(JObject row, float time, string type)
+    {
+        if (Result.Effects.Count >= MaxEffects)
+        {
+            EffectWarning("Typed damage observations exceeded the recording limit; the effect channel is incomplete.");
+            return;
+        }
+        var action = ExactInteger(row["abilityGameID"], 1, uint.MaxValue);
+        var source = ExactInteger(row["sourceID"], 1, long.MaxValue);
+        var target = ExactInteger(row["targetID"], 1, long.MaxValue);
+        if (action == null || source == null || target == null)
+        {
+            EffectWarning("Some typed damage observations had invalid ability or actor IDs and were omitted.");
+            return;
+        }
+        var actionId = (uint)action.Value;
+        var name = row["name"]?.Type == JTokenType.String ? row.Value<string>("name") : null;
+        if (string.IsNullOrEmpty(name)) abilityNames.TryGetValue(actionId, out name);
+        Result.Effects.Add(new LogEffectEvent
+        {
+            Time = time, ActionId = actionId, Name = name ?? "", Type = type,
+            SourceId = source.Value, TargetId = target.Value,
+            SourceInstance = (int?)OptionalInteger(row["sourceInstance"], 1, int.MaxValue),
+            TargetInstance = (int?)OptionalInteger(row["targetInstance"], 1, int.MaxValue),
+            PacketId = OptionalInteger(row["packetID"], 0, long.MaxValue),
+            SourcePosition = EffectPosition(row["sourceResources"]),
+            TargetPosition = EffectPosition(row["targetResources"]),
+        });
+    }
+
+    private long? OptionalInteger(JToken? token, long min, long max)
+    {
+        if (token == null || token.Type == JTokenType.Null) return null;
+        var value = ExactInteger(token, min, max);
+        if (value == null) EffectWarning("Some typed damage observations had invalid instance or packet IDs; those fields are unknown.");
+        return value;
+    }
+
+    private Vector2? EffectPosition(JToken? token)
+    {
+        if (token == null || token.Type == JTokenType.Null) return null;
+        if (token is JObject resources)
+        {
+            // Resource snapshots may legitimately have no position component.
+            if (resources["x"] == null && resources["y"] == null) return null;
+            if (Number(resources["x"], out var x) && Number(resources["y"], out var y) &&
+                Math.Abs(x) <= float.MaxValue && Math.Abs(y) <= float.MaxValue)
+                return new Vector2((float)x, (float)y);
+        }
+        EffectWarning("Some typed damage observations had invalid position resources; those positions are unknown.");
+        return null;
+    }
+
+    private void EffectWarning(string message)
+    {
+        Result.EffectsComplete = false;
+        Warn(message);
+    }
+
+    // Int64 packet identity must never pass through double, which loses integers above 2^53.
+    private static long? ExactInteger(JToken? token, long min, long max) =>
+        token != null && token.Type is JTokenType.Integer or JTokenType.Float &&
+        decimal.TryParse(token.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var value) &&
+        value >= min && value <= max && value == decimal.Truncate(value) ? (long)value : null;
 
     private void AddStatus(JObject row, float time, LogStatusChange change, int? target, bool baseline)
     {

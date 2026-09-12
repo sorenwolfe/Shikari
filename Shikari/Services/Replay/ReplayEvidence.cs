@@ -9,6 +9,7 @@ public sealed class ReplayEvidence
 {
     public const int MaxStatuses = 65536;
     public const int MaxPositions = 144008;
+    public const int MaxEffects = 32768;
     public string Source { get; set; } = "Local recording";
     public string Url { get; set; } = "";
     public string ReportCode { get; set; } = "";
@@ -20,8 +21,28 @@ public sealed class ReplayEvidence
     public List<EvidenceActor> Actors { get; set; } = new();
     public List<EvidenceStatus> Statuses { get; set; } = new();
     public List<EvidencePosition> Positions { get; set; } = new();
+    public List<EvidenceEffect> Effects { get; set; } = new();
+    /// <summary>Optional effect-channel completeness, independent of status evidence. False for older recordings.</summary>
+    public bool EffectsComplete { get; set; }
     public List<EvidenceReference> References { get; set; } = new();
     public string CalibrationSlideId { get; set; } = "";
+}
+
+/// <summary>One explicit FF Logs damage observation with report-scoped actor identity and
+/// nullable resource snapshots. It does not establish tower semantics or live world units.</summary>
+public sealed class EvidenceEffect
+{
+    public float Time { get; set; }
+    public uint ActionId { get; set; }
+    public string Name { get; set; } = "";
+    public string Type { get; set; } = "";
+    public long SourceId { get; set; }
+    public long TargetId { get; set; }
+    public int? SourceInstance { get; set; }
+    public int? TargetInstance { get; set; }
+    public long? PacketId { get; set; }
+    public Vector2? SourcePosition { get; set; }
+    public Vector2? TargetPosition { get; set; }
 }
 
 public sealed class EvidenceActor
