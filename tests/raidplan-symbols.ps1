@@ -7,6 +7,7 @@ $sources += "$root/Shikari/Services/PlanNormaliser.cs", "$root/Shikari/Services/
 $sources += "$root/Shikari/Services/Replay/RecordedCast.cs", "$root/Shikari/Services/Replay/ReplayAttempt.cs", "$root/Shikari/Services/Replay/ReplayBuffer.cs", "$root/Shikari/Services/Replay/ReplayEvidence.cs", "$root/Shikari/Services/Replay/ReplayValidation.cs"
 $sources += "$PSScriptRoot/RaidPlanAreaStubs.cs", "$PSScriptRoot/RaidPlanSymbolTests.cs"
 $sources += "$root/Shikari/Services/Replay/EvidenceActorIdentity.cs"
+$sources += "$root/Shikari/Services/Storage/PlanSnapshot.cs"
 $refs = @(Get-ChildItem "$PSHOME/ref/*.dll" | ForEach-Object FullName) + "$PSHOME/Newtonsoft.Json.dll"
 Add-Type -Path $sources -ReferencedAssemblies $refs -CompilerOptions '/nullable:enable','/nowarn:1701'
 [Shikari.Tests.RaidPlanSymbolTests]::Run()

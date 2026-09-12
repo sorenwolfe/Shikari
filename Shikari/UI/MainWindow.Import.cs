@@ -19,7 +19,7 @@ public sealed partial class MainWindow
     private string unifiedImportInput = string.Empty;
     private ImportSource importSource = ImportSource.Parse("");
     private bool replaceSharedPlan;
-    private bool ImportBusy => importBusy || WtfBusy;
+    private bool ImportBusy => importBusy || WtfBusy || EvidenceWorkPending;
     private string reportInput = string.Empty;
     private string importStatusLine = string.Empty;
     private bool importFailed;

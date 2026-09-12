@@ -7,6 +7,7 @@ $sources += "$PSScriptRoot/ReplayTests.cs"
 $sources += "$root/Shikari/Services/Replay/ReplayValidation.cs"
 $sources += "$root/Shikari/Services/Replay/ReplayEvidence.cs"
 $sources += "$root/Shikari/Services/Replay/EvidenceActorIdentity.cs"
+$sources += "$root/Shikari/Services/Storage/PlanSnapshot.cs"
 $refs = @(Get-ChildItem "$PSHOME/ref/*.dll" | ForEach-Object FullName) + "$PSHOME/Newtonsoft.Json.dll"
 Add-Type -Path $sources -ReferencedAssemblies $refs -CompilerOptions '/nullable:enable','/nowarn:1701'
 [Shikari.Tests.ReplayTests]::Run()

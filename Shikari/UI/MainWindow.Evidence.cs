@@ -15,7 +15,9 @@ namespace Shikari.UI;
 public sealed partial class MainWindow
 {
     private EvidenceTimeline? evidenceTimeline;
-    private readonly Dictionary<string, EvidenceTimeline> evidenceTimelines = new();
+    private ReplayAttempt? evidenceTimelineAttempt;
+    private readonly Dictionary<string, (ReplayAttempt Attempt, EvidenceTimeline Timeline)> evidenceTimelines = new();
+    private (StrategyMergeSession Session, LogFightData Data, LogEvidence Evidence, string PreviousId)? pendingLogReference;
     private string evidenceAttempt = "";
     private long evidenceActor;
     private readonly HashSet<uint> evidenceSelection = new();
@@ -30,6 +32,7 @@ public sealed partial class MainWindow
 
     private void LoadLogReview(PlanDocument plan, LogFightData data)
     {
+        pendingLogReference = null;
         var session = new StrategyMergeSession(plan);
         Run(async cancel =>
         {
@@ -47,53 +50,66 @@ public sealed partial class MainWindow
     {
         if (Plan == null || !session.Matches(Plan))
             throw new InvalidOperationException("The strategy changed while the log was loading. Import again against the current plan.");
+        var previousEntry = Plugin.Replays.Catalog.FirstOrDefault(a => a.PlanId == Plan.Id &&
+            a.Source == "FF Logs" && a.ReportCode == data.ReportCode && a.FightId == data.Fight.Id);
+        if (Plugin.Replays.CatalogLoading || (previousEntry != null && Plugin.Replays.GetLoaded(previousEntry.Id) == null))
+        {
+            pendingLogReference = (session, data, evidence, previousEntry?.Id ?? "");
+            importStatusLine = "Loading the previous reference to preserve its seats and alignment…";
+            if (previousEntry != null) Plugin.Replays.RequestLoad(previousEntry.Id);
+            return;
+        }
+        pendingLogReference = null;
         var statuses = Plugin.DataManager.GetExcelSheet<Status>();
         var jobs = Plugin.DataManager.GetExcelSheet<ClassJob>();
-        var attempt = LogReplayBuilder.Build(session.Snapshot, data, evidence,
-            id => statuses.GetRowOrDefault(id) is { } row && !string.IsNullOrEmpty(row.Name.ToString()),
+        // Resolve the small set of game-sheet lookups here; workers receive plain data only.
+        var validStatuses = evidence.StatusEvents.Select(s => s.StatusId).Where(id => id != 0).Distinct()
+            .Where(id => statuses.GetRowOrDefault(id) is { } row && !string.IsNullOrEmpty(row.Name.ToString())).ToHashSet();
+        var jobIds = data.Actors.Select(a => a.Job).Distinct().ToDictionary(name => name,
             name => jobs.FirstOrDefault(j => LogImporter.SameJob(name, j.Name.ToString(), j.Abbreviation.ToString())).RowId);
-        // Reattaching a pull updates its reference and retains calibration against unchanged geometry.
-        var previous = Plugin.Replays.Attempts.FirstOrDefault(a => a.Plan.Id == Plan.Id &&
-            a.Evidence.Source == "FF Logs" && a.Evidence.ReportCode == data.ReportCode && a.Evidence.FightId == data.Fight.Id);
+        var previous = previousEntry == null ? null : Plugin.Replays.GetLoaded(previousEntry.Id);
+        var reviewed = previous == null ? null : ReviewedReference.Capture(previous);
+        StartEvidenceWork(session, () => PrepareImportedReference(session, data, evidence, validStatuses, jobIds, reviewed),
+            null, imported: true, string.Join("\n", evidence.Warnings));
+    }
+
+    private void AdvancePendingLogReference()
+    {
+        if (pendingLogReference is not { } pending || Plugin.Replays.CatalogLoading) return;
+        if (Plugin.Encounter.InCombat)
+        { pendingLogReference = null; Fail("Import finished during combat. Retry after the pull."); return; }
+        if (Plan?.Id != pending.Session.Snapshot.Id)
+        { pendingLogReference = null; Fail("The strategy changed while the previous reference was loading. Import again against the current plan."); return; }
+        var previous = Plugin.Replays.Catalog.FirstOrDefault(a => a.PlanId == pending.Session.Snapshot.Id &&
+            a.Source == "FF Logs" && a.ReportCode == pending.Data.ReportCode && a.FightId == pending.Data.Fight.Id);
+        if (pending.PreviousId.Length > 0 && previous?.Id != pending.PreviousId)
+        {
+            pendingLogReference = null;
+            Fail("The previous reference was removed or replaced while loading. Import again to choose the current library state.");
+            return;
+        }
         if (previous != null)
         {
-            attempt.Id = previous.Id;
-            if (Newtonsoft.Json.JsonConvert.SerializeObject(previous.Plan.Roster) ==
-                Newtonsoft.Json.JsonConvert.SerializeObject(attempt.Plan.Roster))
+            var state = Plugin.Replays.RequestLoad(previous.Id);
+            if (state == ReplayLoadState.Failed)
             {
-                foreach (var actor in attempt.Evidence.Actors)
-                {
-                    var old = previous.Evidence.Actors.FirstOrDefault(a => a.Id == actor.Id && a.JobId == actor.JobId);
-                    if (old != null) actor.SlotIndex = old.SlotIndex;
-                }
-                foreach (var duplicate in attempt.Evidence.Actors.Where(a => a.SlotIndex >= 0).GroupBy(a => a.SlotIndex).Where(g => g.Count() > 1))
-                    foreach (var actor in duplicate) actor.SlotIndex = -1;
+                pendingLogReference = null;
+                Fail("The previous reference could not be loaded. Retry it in Review, then import again; existing seats and alignment were kept. " + Plugin.Replays.LoadError(previous.Id));
+                return;
             }
-            var calibratedSlide = previous.Evidence.CalibrationSlideId;
-            if (calibratedSlide.Length > 0 && Newtonsoft.Json.JsonConvert.SerializeObject(previous.Plan.FindSlide(calibratedSlide)) ==
-                Newtonsoft.Json.JsonConvert.SerializeObject(attempt.Plan.FindSlide(calibratedSlide)))
-            {
-                attempt.Evidence.CalibrationSlideId = calibratedSlide;
-                attempt.Evidence.References = previous.Evidence.References;
-            }
+            if (state != ReplayLoadState.Ready) return;
         }
-        var result = session.Apply(Plan, attempt, Plugin.Plans.SaveActive);
-        if (!result.Accepted) { Fail(result.Summary); return; }
-        StrategyMergeSession.LinkReplay(Plan, attempt);
-        Plugin.Replays.AddImported(attempt);
-        evidenceTimelines.Remove(attempt.Id); evidenceTimeline = null;
-        SelectReviewAttempt(attempt);
-        if (result.Changed) MarkDirty();
-        importStatusLine = result.Summary;
-        importDetail = string.Join("\n", evidence.Warnings);
-        importFailed = false;
+        try { ApplyLogReference(pending.Session, pending.Data, pending.Evidence); }
+        catch (Exception ex) { pendingLogReference = null; Fail(ex.Message); }
     }
 
     private EvidenceTimeline TimelineFor(ReplayAttempt attempt)
     {
-        if (evidenceAttempt != attempt.Id || evidenceTimeline == null)
+        if (!ReferenceEquals(evidenceTimelineAttempt, attempt) || evidenceTimeline == null)
         {
+            evidenceTimelineAttempt = attempt;
             evidenceAttempt = attempt.Id;
+            evidenceBoundsId = "";
             evidenceTimeline = CachedEvidenceTimeline(attempt);
             evidenceActor = attempt.Evidence.Actors.FirstOrDefault(a => a.IsLocal)?.Id ?? attempt.Evidence.Actors.FirstOrDefault()?.Id ?? 0;
             evidenceSelection.Clear();
@@ -107,9 +123,24 @@ public sealed partial class MainWindow
 
     private EvidenceTimeline CachedEvidenceTimeline(ReplayAttempt attempt)
     {
-        if (evidenceTimelines.TryGetValue(attempt.Id, out var timeline)) return timeline;
-        if (evidenceTimelines.Count >= 30) evidenceTimelines.Clear();
-        return evidenceTimelines[attempt.Id] = new EvidenceTimeline(attempt.Evidence);
+        PruneEvidenceTimelines();
+        if (evidenceTimelines.TryGetValue(attempt.Id, out var cached) && ReferenceEquals(cached.Attempt, attempt)) return cached.Timeline;
+        if (evidenceTimelines.Count >= 2)
+            evidenceTimelines.Remove(evidenceTimelines.Keys.First(k => k != attempt.Id));
+        var timeline = new EvidenceTimeline(attempt.Evidence);
+        evidenceTimelines[attempt.Id] = (attempt, timeline);
+        return timeline;
+    }
+
+    private void PruneEvidenceTimelines()
+    {
+        foreach (var id in evidenceTimelines.Keys.Where(id => (id != reviewAttemptId && id != reviewCompareId) ||
+                     !ReferenceEquals(Plugin.Replays.GetLoaded(id), evidenceTimelines[id].Attempt)).ToArray())
+            evidenceTimelines.Remove(id);
+        if (comparedLeft?.Id != reviewAttemptId || comparedRight?.Id != reviewCompareId ||
+            !ReferenceEquals(comparedLeft, Plugin.Replays.GetLoaded(reviewAttemptId)) ||
+            !ReferenceEquals(comparedRight, Plugin.Replays.GetLoaded(reviewCompareId)))
+        { comparedLeft = null; comparedRight = null; }
     }
 
     private string EvidenceStatusName(EvidenceStatus status)
@@ -126,7 +157,7 @@ public sealed partial class MainWindow
 
     private void DrawEvidencePanel(ReplayAttempt attempt)
     {
-        ImGui.BeginDisabled(Plan?.Id != attempt.Plan.Id || Plugin.Encounter.InCombat);
+        ImGui.BeginDisabled(Plan?.Id != attempt.Plan.Id || Plugin.Encounter.InCombat || EvidenceWorkPending);
         if (ImGui.Button("Update strategy from this pull")) SaveEvidenceEdits(attempt);
         ImGui.EndDisabled();
         if (Plan?.Id == attempt.Plan.Id) DrawStrategyEvidence(Plan);
@@ -162,7 +193,7 @@ public sealed partial class MainWindow
                     if (ImGui.Selectable(i < 0 ? "Unassigned" : attempt.Plan.Roster[i].DisplayName, actorEntry.SlotIndex == i))
                     {
                         foreach (var other in evidence.Actors.Where(a => a != actorEntry && a.SlotIndex == i)) other.SlotIndex = -1;
-                        actorEntry.SlotIndex = i; reviewSeat = i; SaveEvidenceEdits(attempt);
+                        actorEntry.SlotIndex = i; reviewSeat = i; SaveEvidenceEdits(attempt, enrichStrategy: false);
                     }
                 ImGui.EndCombo();
             }
@@ -288,14 +319,15 @@ public sealed partial class MainWindow
         InvalidatePullValidation();
         try
         {
-            if (enrichStrategy && Plan?.Id == attempt.Plan.Id && !Plugin.Encounter.InCombat)
-            {
-                var result = new StrategyMergeSession(Plan).Apply(Plan, attempt, Plugin.Plans.SaveActive);
-                evidenceMessage = result.Summary;
-                if (result.Changed) MarkDirty();
-                StrategyMergeSession.LinkReplay(Plan, attempt);
-            }
+            // Seat/alignment edits enter the replay save queue immediately. They do not
+            // need full strategy analysis; the explicit strategy action prepares separately.
             Plugin.Replays.SaveEvidence(attempt);
+            if (enrichStrategy && Plan?.Id == attempt.Plan.Id && !Plugin.Encounter.InCombat && !EvidenceWorkPending)
+            {
+                var session = new StrategyMergeSession(Plan);
+                var snapshot = ReplaySnapshot.Copy(attempt);
+                StartEvidenceWork(session, () => new(session, snapshot, session.Prepare(snapshot)), attempt, imported: false);
+            }
         }
         catch (Exception ex) { evidenceMessage = "Could not save replay changes: " + ex.Message; }
     }

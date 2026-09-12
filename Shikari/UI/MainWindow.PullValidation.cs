@@ -56,7 +56,7 @@ public sealed partial class MainWindow
     private void AdvancePullValidation()
     {
         PollValidationCases();
-        var attempt = Plugin.Replays.Attempts.FirstOrDefault(a => a.Id == reviewAttemptId);
+        var attempt = Plugin.Replays.GetLoaded(reviewAttemptId);
         var hadInput = pullValidation.Snapshot != null;
         if (validationActorId != 0 && validationActorId != evidenceActor) { InvalidatePullValidation(); return; }
         pullValidation.Poll(attempt == null ? null : ValidationPlan(attempt), attempt, validationEditRevision,

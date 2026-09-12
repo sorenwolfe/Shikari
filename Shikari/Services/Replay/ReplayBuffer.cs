@@ -1,7 +1,7 @@
 using System;
 using System.Linq;
-using Newtonsoft.Json;
 using Shikari.Model;
+using Shikari.Services.Storage;
 
 namespace Shikari.Services.Replay;
 
@@ -18,9 +18,7 @@ public sealed class ReplayBuffer
 
     public ReplayBuffer(PlanDocument plan, int localSlot, DateTime startedUtc)
     {
-        var settings = PlanJson.Readable();
-        var copy = JsonConvert.DeserializeObject<PlanDocument>(JsonConvert.SerializeObject(plan, settings), settings)
-            ?? throw new InvalidOperationException("Could not snapshot the plan.");
+        var copy = PlanSnapshot.Copy(plan);
         Attempt = new ReplayAttempt { Plan = copy, LocalSlot = localSlot, StartedUtc = startedUtc };
     }
 

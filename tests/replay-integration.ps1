@@ -8,6 +8,7 @@ $sources += "$root/Shikari/Services/Live/WorldAlignment.cs", "$root/Shikari/Serv
 $sources += "$PSScriptRoot/ReplayIntegrationStubs.cs"
 $sources += "$PSScriptRoot/ReplayBackgroundTests.cs"
 $sources += "$root/Shikari/Services/Replay/ReplayEvidence.cs"
+$sources += @('ReplayStore.Library', 'ReplayCatalog', 'ReplaySnapshot' | ForEach-Object { "$root/Shikari/Services/Replay/$_.cs" })
 $sources += "$root/Shikari/Services/Replay/RecordedCast.cs"
 $sources += "$root/Shikari/Services/Replay/EvidenceActorIdentity.cs"
 $refs = @(Get-ChildItem "$PSHOME/ref/*.dll" | ForEach-Object FullName) + "$PSHOME/Newtonsoft.Json.dll"

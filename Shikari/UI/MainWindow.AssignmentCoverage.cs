@@ -20,6 +20,7 @@ public sealed partial class MainWindow
     }
     private readonly Dictionary<string, CoverageCache> assignmentCoverage = new();
     private CoverageRun? assignmentCheck;
+    private (AdaptiveMechanic Rule, AssignmentExample Example)? pendingAssignmentExample;
     private void CancelAssignmentCheck() { assignmentCheck?.Steps.Dispose(); assignmentCheck = null; }
     private void InvalidateAssignmentCoverage() { CancelAssignmentCheck(); assignmentCoverage.Clear(); }
     private static bool CoverageInputsMatch(CoverageCache cached, PlanDocument plan, string rule, long revision) =>
@@ -29,6 +30,7 @@ public sealed partial class MainWindow
 
     private void AdvanceAssignmentCheck(PlanDocument? plan)
     {
+        AdvanceAssignmentExample();
         var job = assignmentCheck;
         if (job == null) return;
         var rule = plan?.AdaptiveMechanics.FirstOrDefault(r => r.Id == job.RuleId);
@@ -69,17 +71,21 @@ public sealed partial class MainWindow
         { assignmentCoverage.Remove(rule.Id); cached = null; }
         if (assignmentCheck?.RuleId == rule.Id)
         {
-            ImGui.TextWrapped($"Checking recordings… {assignmentCheck.Report.Recordings} recordings / {assignmentCheck.Report.Examples.Count} examples processed");
+            ImGui.TextWrapped($"Loading and checking recordings… {assignmentCheck.Report.Recordings} recordings / {assignmentCheck.Report.Examples.Count} examples processed");
             if (ImGui.SmallButton("Cancel check")) CancelAssignmentCheck();
         }
-        ImGui.BeginDisabled(Plugin.Encounter.InCombat || !rule.IsValid(plan));
+        if (Plugin.Replays.CatalogLoading) ImGui.TextWrapped("Reading the replay library before checking coverage…");
+        ImGui.BeginDisabled(Plugin.Encounter.InCombat || !rule.IsValid(plan) || Plugin.Replays.CatalogLoading);
         if (ImGui.Button("Check recordings"))
         {
             CancelAssignmentCheck();
+            ReleaseReviewResources();
+            pendingAssignmentExample = null;
             assignmentCoverage.Remove(rule.Id); cached = null;
             var stamp = new CoverageCache(plan, plan.Slides, plan.Roster, plan.StrategyEvidence, fingerprint,
                 Plugin.Replays.EvidenceRevision, new AdaptiveCoverage());
-            assignmentCheck = new(rule.Id, stamp, AdaptiveEvidenceAudit.AnalyseIncrementally(plan, rule, Plugin.Replays.Attempts.ToArray()).GetEnumerator());
+            var ids = Plugin.Replays.Catalog.Select(a => a.Id).ToArray();
+            assignmentCheck = new(rule.Id, stamp, AdaptiveEvidenceAudit.AnalyseStreaming(plan, rule, LoadCoverageRecordings(ids), ids.Length).GetEnumerator());
         }
         ImGui.EndDisabled();
         if (cached == null)
@@ -117,7 +123,7 @@ public sealed partial class MainWindow
                 if (example.Distance.HasValue)
                     ImGui.TextWrapped($"Observed distance to the authored spot: {example.Distance.Value * 100:0.0}% of board width. {example.PositionReason}. This is proximity, not a success check.");
                 else ImGui.TextDisabled(example.PositionReason);
-                ImGui.BeginDisabled(Plugin.Encounter.InCombat || !Plugin.Replays.Attempts.Any(a => a.Id == example.AttemptId));
+                ImGui.BeginDisabled(Plugin.Encounter.InCombat || !Plugin.Replays.Catalog.Any(a => a.Id == example.AttemptId));
                 if (ImGui.SmallButton("Review this example")) OpenAssignmentExample(rule, example);
                 ImGui.EndDisabled();
                 ImGui.Separator();
@@ -131,8 +137,22 @@ public sealed partial class MainWindow
     private void OpenAssignmentExample(AdaptiveMechanic rule, AssignmentExample example)
     {
         if (Plugin.Encounter.InCombat) return;
-        var attempt = Plugin.Replays.Attempts.FirstOrDefault(a => a.Id == example.AttemptId);
+        RequestReviewAttempt(example.AttemptId);
+        pendingAssignmentExample = (rule, example);
+        workspace = 2; IsOpen = true;
+        AdvanceAssignmentExample();
+    }
+
+    private void AdvanceAssignmentExample()
+    {
+        if (pendingAssignmentExample is not { } pending) return;
+        if (Plugin.Encounter.InCombat || reviewAttemptId != pending.Example.AttemptId ||
+            !Plugin.Replays.Catalog.Any(a => a.Id == pending.Example.AttemptId))
+        { pendingAssignmentExample = null; return; }
+        var attempt = Plugin.Replays.GetLoaded(pending.Example.AttemptId);
         if (attempt == null) return;
+        var (rule, example) = pending;
+        pendingAssignmentExample = null;
         SelectReviewAttempt(attempt);
         TimelineFor(attempt);
         evidenceActor = example.ActorId;
@@ -144,5 +164,21 @@ public sealed partial class MainWindow
         evidenceSlide = example.BranchIndex >= 0 && example.BranchIndex < rule.Branches.Count ? rule.Branches[example.BranchIndex].SlideId : "";
         workspace = 2;
         IsOpen = true;
+    }
+
+    private static IEnumerable<ReplayAuditInput> LoadCoverageRecordings(string[] ids)
+    {
+        foreach (var id in ids.Take(30))
+        {
+            while (true)
+            {
+                var state = Plugin.Replays.RequestLoad(id);
+                if (state is ReplayLoadState.Failed or ReplayLoadState.Missing)
+                { yield return new(Error: "Recording unavailable or could not be loaded"); break; }
+                if (Plugin.Replays.GetLoaded(id) is { } attempt)
+                { yield return new(attempt); break; }
+                yield return new();
+            }
+        }
     }
 }

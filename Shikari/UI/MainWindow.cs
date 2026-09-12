@@ -164,8 +164,10 @@ public sealed partial class MainWindow : Window, IDisposable
 
     public override void Update()
     {
+        PruneReviewResources();
         AdvanceAssignmentCheck(Plan);
         Plugin.Plans.Poll();
+        AdvanceEvidenceWork();
         AdvancePullValidation();
         if (autosave.Update(Plan, DateTime.UtcNow, Plugin.Plans.RequestSave))
             Plugin.SaveConfig();
@@ -175,6 +177,7 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         CancelAssignmentCheck();
         InvalidatePullValidation();
+        ReleaseReviewResources();
         if (dirty && Plan != null) autosave.RequestNow(Plan, DateTime.UtcNow, Plugin.Plans.RequestSave);
     }
 
@@ -366,6 +369,8 @@ public sealed partial class MainWindow : Window, IDisposable
         Plugin.Encounter.CombatStarted -= CancelAssignmentCheck;
         Plugin.Encounter.CombatStarted -= InvalidatePullValidation;
         CancelAssignmentCheck();
+        ReleaseReviewResources();
+        DisposeEvidenceWork();
         pullValidation.Dispose();
         positionCheck.Dispose();
         validationCaseStore?.Dispose();

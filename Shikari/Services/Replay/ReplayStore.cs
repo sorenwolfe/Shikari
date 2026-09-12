@@ -14,7 +14,7 @@ using Shikari.Services.Storage;
 namespace Shikari.Services.Replay;
 
 /// <summary>Framework-owned capture; disk work is serialized off the drawing/game thread.</summary>
-public sealed class ReplayStore : IDisposable
+public sealed partial class ReplayStore : IDisposable
 {
     private const int MaxFileBytes = 32 * 1024 * 1024;
     private readonly string directory;
@@ -38,7 +38,7 @@ public sealed class ReplayStore : IDisposable
     private readonly Stopwatch clock = new();
     private float clockOffset;
     private float RecordingTime => clockOffset + (float)clock.Elapsed.TotalSeconds;
-    private readonly Task<List<ReplayAttempt>> loading;
+    private readonly Task<List<ReplayCatalogEntry>> loading;
     private Task writes;
     private ReplayBuffer? buffer;
     private StrategyMergeSession? strategySession;
@@ -58,9 +58,14 @@ public sealed class ReplayStore : IDisposable
     public ReplayStore()
     {
         directory = Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "replays");
+        storageMutexName = StorageMutexName(directory);
         retention = Math.Clamp(Plugin.Config.ReplayRetention, 1, 30);
         var retain = retention;
-        loading = Task.Run(() => Load(retain));
+        loading = Task.Run(() =>
+        {
+            try { return WithStorageOwnership(() => Load(retain), new List<ReplayCatalogEntry>()); }
+            catch (Exception ex) { status = "Replay storage could not be read: " + ex.Message; return new List<ReplayCatalogEntry>(); }
+        });
         writes = loading;
         Plugin.Encounter.CombatStarted += Begin;
         Plugin.Encounter.CombatEnded += End;
@@ -97,6 +102,9 @@ public sealed class ReplayStore : IDisposable
         pullGeneration++;
         var plan = Plugin.Plans.Active;
         if (!Plugin.Config.ReplayEnabled || plan == null || plan.Slides.Count == 0) return;
+        PublishSnapshotSaves();
+        if (unsaved.Count + pending.Count >= 2 || CachedBytes > CacheBudgetBytes)
+        { status = "Recording paused while earlier pulls need saving. Retry or remove unsaved recordings in Review."; return; }
         // Account for earlier combat-start subscribers and our own snapshot work. Casts already
         // use the encounter's pull origin; samples and the final duration must use it too.
         clock.Restart();
@@ -132,7 +140,7 @@ public sealed class ReplayStore : IDisposable
             {
                 // Imports already added during loading stay first, just as later imports do.
                 // Load orders the saved subset identically for the UI and durable retention.
-                attempts.AddRange(loading.Result.Where(a => !deletedBeforeLoad.Contains(a.Id) && attempts.All(current => current.Id != a.Id)));
+                catalog.AddRange(loading.Result.Where(a => !deletedBeforeLoad.Contains(a.Id) && catalog.All(current => current.Id != a.Id)));
                 for (var i = 0; i < loading.Result.Count; i++)
                     if (!deletedBeforeLoad.Contains(loading.Result[i].Id)) visibleOrder.TryAdd(loading.Result[i].Id, -i - 1L);
                 EvidenceRevision++;
@@ -140,6 +148,8 @@ public sealed class ReplayStore : IDisposable
             deletedBeforeLoad.Clear();
             Trim();
         }
+        PublishSnapshotSaves();
+        PublishReads();
         if (loaded) Trim();
         PublishCompletions();
         PublishPlanSaves();
@@ -271,7 +281,11 @@ public sealed class ReplayStore : IDisposable
         {
             if (!pending.TryGetValue(item.Id, out var order) || order != item.Order) continue;
             pending.Remove(item.Id);
-            if (item.Attempt != null) AddVisible(item.Attempt, item.Order);
+            if (item.Attempt != null)
+            {
+                if (item.SaveFailed) unsaved.Add(item.Id);
+                AddVisible(item.Attempt, item.Order, item.SaveFailed);
+            }
             if (item.Error.Length > 0) { status = item.Error; continue; }
             if (item.SaveFailed) { status = "Recording is available for review."; continue; }
             status = "Recording saved.";
@@ -302,12 +316,14 @@ public sealed class ReplayStore : IDisposable
         }
     }
 
-    private void AddVisible(ReplayAttempt attempt, long order)
+    private void AddVisible(ReplayAttempt attempt, long order, bool protect = false)
     {
-        attempts.RemoveAll(a => a.Id == attempt.Id);
+        InvalidateLoad(attempt.Id);
+        catalog.RemoveAll(a => a.Id == attempt.Id);
         visibleOrder[attempt.Id] = order;
-        var index = attempts.FindIndex(a => !visibleOrder.TryGetValue(a.Id, out var current) || current < order);
-        attempts.Insert(index < 0 ? attempts.Count : index, attempt);
+        var index = catalog.FindIndex(a => !visibleOrder.TryGetValue(a.Id, out var current) || current < order);
+        catalog.Insert(index < 0 ? catalog.Count : index, ReplayCatalogEntry.From(attempt));
+        if (!Admit(attempt, protect) && protect) throw new IOException("Unsaved recording could not enter the protected replay cache.");
         EvidenceRevision++;
         if (loaded) Trim();
     }
@@ -315,24 +331,48 @@ public sealed class ReplayStore : IDisposable
     public void AddImported(ReplayAttempt attempt)
     {
         if (!ReplayValidation.IsValid(attempt)) throw new IOException("Replay evidence failed validation.");
+        PublishSnapshotSaves();
+        if (unsaved.Count + pending.Count + (buffer != null ? 1 : 0) >= MaxLoadedAttempts && !unsaved.Contains(attempt.Id) || !Admit(attempt))
+            throw new IOException("Replay memory is occupied. Finish or retry pending saves and close the comparison before importing another recording.");
         var order = ++nextOrder;
         SaveEvidence(attempt, promote: true, order);
         pending.Remove(attempt.Id);
-        AddVisible(attempt, order);
+        AddVisible(attempt, order, protect: true);
     }
 
-    public void SaveEvidence(ReplayAttempt attempt) => SaveEvidence(attempt, promote: false,
-        visibleOrder.TryGetValue(attempt.Id, out var order) ? order : 0);
+    public void SaveEvidence(ReplayAttempt attempt)
+    {
+        if (!catalog.Any(entry => entry.Id == attempt.Id) || !ReferenceEquals(GetLoaded(attempt.Id), attempt))
+            throw new IOException("This recording was deleted, evicted or replaced; reopen its current payload before saving evidence.");
+        SaveEvidence(attempt, promote: false, visibleOrder.TryGetValue(attempt.Id, out var order) ? order : 0);
+    }
+
+    public void RetrySaves()
+    {
+        if (disposed) return;
+        PublishSnapshotSaves();
+        foreach (var id in unsaved.ToArray())
+        {
+            try
+            {
+                var attempt = GetLoaded(id) ?? throw new IOException("The unsaved recording is not available in memory.");
+                SaveEvidence(attempt);
+            }
+            catch (Exception ex) { status = "Some replay saves could not be retried: " + ex.Message; }
+        }
+    }
 
     private void SaveEvidence(ReplayAttempt attempt, bool promote, long order)
     {
         if (!ReplayValidation.IsValid(attempt)) throw new IOException("Replay evidence failed validation.");
-        // Snapshot now, so edits made while a queued write runs cannot tear the saved file.
-        var json = Serialize(attempt);
-        var id = attempt.Id;
-        var keep = Math.Clamp(Plugin.Config.ReplayRetention, 1, 30);
+        if (GetLoaded(attempt.Id) is { } current && !ReferenceEquals(current, attempt))
+            throw new IOException("This recording was replaced; reopen it before saving evidence.");
+        if (GetLoaded(attempt.Id) == null && !Admit(attempt)) throw new IOException("No replay cache space is available for this save.");
+        QueueSnapshot(attempt, promote, order);
+        cacheBytes[attempt.Id] = ReplayMemory.Estimate(attempt);
+        var entry = catalog.FindIndex(e => e.Id == attempt.Id);
+        if (entry >= 0) catalog[entry] = ReplayCatalogEntry.From(attempt);
         EvidenceRevision++;
-        Queue(() => Persist(id, json, keep, promote, order));
     }
 
     private static string Serialize(ReplayAttempt attempt)
@@ -380,10 +420,13 @@ public sealed class ReplayStore : IDisposable
     private void Trim()
     {
         var keep = Math.Clamp(Plugin.Config.ReplayRetention, 1, 30);
-        while (attempts.Count > keep)
+        while (catalog.Count > keep)
         {
-            visibleOrder.Remove(attempts[^1].Id);
-            attempts.RemoveAt(attempts.Count - 1);
+            var removable = catalog.FindLastIndex(a => !unsaved.Contains(a.Id));
+            if (removable < keep || removable < 0) break;
+            var id = catalog[removable].Id;
+            visibleOrder.Remove(id); Evict(id); InvalidateLoad(id);
+            catalog.RemoveAt(removable);
             EvidenceRevision++;
         }
         if (keep == retention) return;
@@ -406,11 +449,13 @@ public sealed class ReplayStore : IDisposable
 
     public void Delete(string id)
     {
+        if (disposed) return;
         if (!Guid.TryParseExact(id, "N", out _)) return;
         if (!loaded) deletedBeforeLoad.Add(id);
         pending.Remove(id);
+        ForgetSnapshots(id); InvalidateLoad(id);
         visibleOrder.Remove(id);
-        attempts.RemoveAll(a => a.Id == id);
+        catalog.RemoveAll(a => a.Id == id); Evict(id);
         EvidenceRevision++;
         Queue(() => StorageOperation(id, () =>
         {
@@ -423,13 +468,17 @@ public sealed class ReplayStore : IDisposable
 
     public void Clear()
     {
+        if (disposed) return;
         // Queue the clear behind loading so a late load cannot resurrect files deleted in the
         // UI. Update ignores the load result once loaded is true.
         loaded = true;
         deletedBeforeLoad.Clear();
         pending.Clear();
+        libraryEpoch++;
+        requestedLoads.Clear(); loadErrors.Clear(); reviewPins.Clear();
+        foreach (var id in unsaved.ToArray()) ForgetSnapshots(id);
         visibleOrder.Clear();
-        attempts.Clear();
+        attempts.Clear(); catalog.Clear(); cacheBytes.Clear(); cacheUse.Clear();
         EvidenceRevision++;
         Queue(() => StorageOperation("library", () =>
         {
@@ -454,7 +503,7 @@ public sealed class ReplayStore : IDisposable
         // Every caller runs on the framework/UI thread; continuations serialize all disk writes.
         writes = writes.ContinueWith(_ =>
         {
-            try { action(); }
+            try { WithStorageOwnership(() => { action(); return true; }, false); }
             catch (Exception ex)
             {
                 // Tracked disk failures must not also survive in ordinary status after recovery.
@@ -463,9 +512,9 @@ public sealed class ReplayStore : IDisposable
         }, TaskScheduler.Default);
     }
 
-    private List<ReplayAttempt> Load(int retention)
+    private List<ReplayCatalogEntry> Load(int retention)
     {
-        var result = new List<ReplayAttempt>();
+        var result = new List<ReplayCatalogEntry>();
         try
         {
             if (!Directory.Exists(directory)) return result;
@@ -474,15 +523,13 @@ public sealed class ReplayStore : IDisposable
                 .OrderByDescending(f => f.LastWriteTimeUtc).ToArray();
             foreach (var file in files)
             {
+                if (disposed) break;
                 try
                 {
-                    if (file.Length > MaxFileBytes) throw new IOException("Replay file exceeds size limit.");
-                    var replay = JsonConvert.DeserializeObject<ReplayAttempt>(File.ReadAllText(file.FullName), PlanJson.Compact());
-                    if (replay == null || replay.Id != Path.GetFileNameWithoutExtension(file.Name) || !ReplayValidation.IsValid(replay))
-                        throw new IOException("Replay is incomplete or uses an unsupported format.");
+                    var replay = ReadPayload(file.FullName, Path.GetFileNameWithoutExtension(file.Name));
                     if (result.Count < retention)
                     {
-                        result.Add(replay);
+                        result.Add(ReplayCatalogEntry.From(replay));
                     }
                     else file.Delete();
                 }
@@ -496,6 +543,27 @@ public sealed class ReplayStore : IDisposable
         persisted.AddRange(result.Select(a => a.Id));
         for (var i = 0; i < result.Count; i++) persistedOrder[result[i].Id] = -i - 1L;
         return result;
+    }
+
+    private static ReplayAttempt ReadPayload(string path, string id)
+    {
+        // Atomic replacement may proceed while this immutable old file is being decoded.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        if (stream.Length > MaxFileBytes) throw new IOException("Replay file exceeds size limit.");
+        using var text = new StreamReader(stream);
+        using var reader = new JsonTextReader(text) { MaxDepth = 64 };
+        var settings = PlanJson.Compact();
+        // Compact settings are for writing. Ignoring explicit null/default values while
+        // reading can turn malformed evidence into a valid graph before validation.
+        settings.NullValueHandling = NullValueHandling.Include;
+        settings.DefaultValueHandling = DefaultValueHandling.Include;
+        settings.Converters.Insert(0, new ReplayVectorReader());
+        var replay = JsonSerializer.Create(settings).Deserialize<ReplayAttempt>(reader);
+        while (reader.Read())
+            if (reader.TokenType != JsonToken.Comment) throw new IOException("Replay contains unexpected trailing JSON content.");
+        if (replay == null || replay.Id != id || !ReplayValidation.IsValid(replay))
+            throw new IOException("Replay is incomplete or uses an unsupported format.");
+        return replay;
     }
 
     public void Dispose() => Dispose(saveRecording: true);
@@ -515,6 +583,16 @@ public sealed class ReplayStore : IDisposable
         if (saveRecording) Finish("Plugin unloaded");
         else { buffer = null; strategySession = null; clock.Stop(); }
         // Let bounded pending writes complete before the plugin's load context is released.
-        Task.WaitAll(new[] { loading, writes }, TimeSpan.FromSeconds(3));
+        if (!Task.WaitAll(new[] { loading, writes, reads }, TimeSpan.FromSeconds(3)))
+        {
+            // Only the operation already owning the directory may finish after this point.
+            // In particular, old queued saves/deletes/clears cannot affect a reloaded plugin.
+            discardQueuedStorage = true;
+            lock (saveGate) queuedSaves.Clear();
+            status = "Replay storage remained busy during shutdown. Unstarted operations were cancelled; the last durable files were preserved.";
+            Plugin.Log.Warning(new TimeoutException(status), "Mechanic replay storage did not finish before shutdown.");
+        }
+        while (readResults.TryDequeue(out _)) { }
+        attempts.Clear(); catalog.Clear();
     }
 }

@@ -59,7 +59,7 @@ public sealed class StrategyMergeSession
     private readonly string fingerprint;
     public StrategyMergeSession(PlanDocument plan)
     {
-        Snapshot = JsonConvert.DeserializeObject<PlanDocument>(JsonConvert.SerializeObject(plan))!;
+        Snapshot = PlanSnapshot.Copy(plan);
         fingerprint = Fingerprint(plan);
     }
 
@@ -74,7 +74,7 @@ public sealed class StrategyMergeSession
     /// <summary>Uses only captured data; safe on a worker with exclusive ownership of the recording.</summary>
     public Prepared Prepare(ReplayAttempt attempt)
     {
-        var staged = JsonConvert.DeserializeObject<PlanDocument>(JsonConvert.SerializeObject(Snapshot))!;
+        var staged = PlanSnapshot.Copy(Snapshot);
         var result = StrategyEnrichment.Apply(staged, attempt);
         return new Prepared(this, staged, result);
     }

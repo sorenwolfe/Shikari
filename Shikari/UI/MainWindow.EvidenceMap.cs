@@ -39,11 +39,11 @@ public sealed partial class MainWindow
                 if (evidence.CalibrationSlideId != slide!.Id) evidence.References.Clear();
                 evidence.CalibrationSlideId = slide.Id;
                 evidence.References.Add(new EvidenceReference { Source = referenceSource, Board = referenceBoard });
-                SaveEvidenceEdits(attempt);
+                SaveEvidenceEdits(attempt, enrichStrategy: false);
             }
             ImGui.EndDisabled();
             ImGui.SameLine();
-            if (ImGui.Button("Clear alignment")) { evidence.References.Clear(); evidenceOverlay = false; SaveEvidenceEdits(attempt); }
+            if (ImGui.Button("Clear alignment")) { evidence.References.Clear(); evidenceOverlay = false; SaveEvidenceEdits(attempt, enrichStrategy: false); }
             ImGui.TextWrapped($"{evidence.References.Count} reference points / " + (aligned ? $"fit error {alignment.Residual:P1}" : "alignment not confirmed"));
             ImGui.TreePop();
         }
@@ -104,7 +104,8 @@ public sealed partial class MainWindow
 
     private void DrawEvidenceComparisonOverlay(ReplayAttempt attempt, Slide slide)
     {
-        var comparison = Plugin.Replays.Attempts.FirstOrDefault(a => a.Id == reviewCompareId && a.Plan.Id == attempt.Plan.Id);
+        var comparison = Plugin.Replays.GetLoaded(reviewCompareId);
+        if (comparison?.Plan.Id != attempt.Plan.Id) comparison = null;
         var anchor = SelectedReviewMechanic(attempt);
         if (comparison == null || anchor == null || !CompatibleReplayBoards(attempt, comparison)) return;
         var other = MatchingReviewMechanic(comparison, anchor);

@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Dalamud.Plugin.Services;
 using Lumina.Excel.Sheets;
 using Newtonsoft.Json;
 using Shikari.Model;
+using Shikari.Services.Storage;
 
 namespace Shikari.Services;
 
@@ -24,23 +26,44 @@ public sealed class EncounterLearner : IDisposable
     private readonly string directory;
     private readonly Dictionary<uint, FightMemory> memories = new();
     private readonly List<CastEvent> pullBuffer = new();
-    private readonly JsonSerializerSettings settings = PlanJson.Readable();
+    private readonly LearnedPersistenceQueue persistence;
+    private readonly TimeSpan shutdownTimeout;
+    private readonly Dictionary<uint, string> preparationErrors = new();
+    private readonly Dictionary<uint, (long Revision, bool Failed)> pendingDeletes = new();
+    private readonly HashSet<uint> unreadableTerritories = new();
 
     private uint currentTerritory;
     private bool pullCommitted;
+    private bool disposed;
+    private bool initialized;
+    private bool skipCurrentPull = true;
+    private DateTime nextInitializationUtc;
+    private string? initializationError;
 
-    public EncounterLearner()
+    public bool IsLoading => !initialized && !disposed;
+    public bool IsSaving => persistence.IsSaving;
+    public string? StorageError => initializationError ?? preparationErrors.Values.FirstOrDefault() ?? persistence.LastError;
+
+    public EncounterLearner() : this(Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "learned")) { }
+
+    internal EncounterLearner(string directory, Action<string, string>? write = null, Action<string>? delete = null,
+        TimeSpan? shutdownTimeout = null)
     {
-        directory = Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "learned");
+        this.directory = Path.GetFullPath(directory);
+        this.shutdownTimeout = shutdownTimeout ?? TimeSpan.FromSeconds(3);
         Directory.CreateDirectory(directory);
-        LoadAll();
-
-        currentTerritory = Plugin.ClientState.TerritoryType;
-
-        Plugin.Encounter.CombatStarted += OnCombatStarted;
-        Plugin.Encounter.CombatEnded += OnCombatEnded;
-        Plugin.Encounter.CastStarted += OnCastStarted;
-        Plugin.ClientState.TerritoryChanged += OnTerritoryChanged;
+        persistence = new LearnedPersistenceQueue(directory, write, delete);
+        try
+        {
+            currentTerritory = Plugin.ClientState.TerritoryType;
+            TryInitialize();
+            Plugin.Encounter.CombatStarted += OnCombatStarted;
+            Plugin.Encounter.CombatEnded += OnCombatEnded;
+            Plugin.Encounter.CastStarted += OnCastStarted;
+            Plugin.ClientState.TerritoryChanged += OnTerritoryChanged;
+            Plugin.Framework.Update += PollStorage;
+        }
+        catch { Dispose(saveChanges: false); throw; }
     }
 
     /// <summary>
@@ -55,9 +78,9 @@ public sealed class EncounterLearner : IDisposable
     public string DriftAnchor { get; private set; } = string.Empty;
 
     /// <summary>What is known about the fight in the current zone, if anything.</summary>
-    public FightMemory? Current => memories.GetValueOrDefault(currentTerritory);
+    public FightMemory? Current => initialized ? memories.GetValueOrDefault(currentTerritory) : null;
 
-    public IEnumerable<FightMemory> All => memories.Values.OrderByDescending(m => m.LastSeenUtc);
+    public IEnumerable<FightMemory> All => initialized ? memories.Values.OrderByDescending(m => m.LastSeenUtc) : Enumerable.Empty<FightMemory>();
 
     /// <summary>Casts recorded so far in the pull that is running now.</summary>
     public IReadOnlyList<CastEvent> PullSoFar => pullBuffer;
@@ -109,6 +132,7 @@ public sealed class EncounterLearner : IDisposable
 
     private void OnCombatStarted()
     {
+        skipCurrentPull = !initialized;
         pullBuffer.Clear();
         pullCommitted = false;
         Drift = 0f;
@@ -118,7 +142,7 @@ public sealed class EncounterLearner : IDisposable
 
     private void OnCastStarted(CastEvent evt)
     {
-        if (!Plugin.Config.LearningEnabled)
+        if (!initialized || skipCurrentPull || !Plugin.Config.LearningEnabled)
             return;
 
         pullBuffer.Add(evt);
@@ -142,15 +166,18 @@ public sealed class EncounterLearner : IDisposable
         // Leaving the zone mid-pull still leaves us with usable data.
         CommitPull(cleared: false);
         currentTerritory = territory;
+        skipCurrentPull = true;
         Drift = 0f;
         DriftConfirmed = false;
     }
 
     /// <summary>Called when the duty is completed, so a clear can be counted as one.</summary>
-    public void NoteClear() => CommitPull(cleared: true);
+    public void NoteClear() { if (!disposed) CommitPull(cleared: true); }
 
     private void CommitPull(bool cleared)
     {
+        if (!initialized || skipCurrentPull)
+        { pullBuffer.Clear(); pullCommitted = true; return; }
         if (pullCommitted)
         {
             // A clear arriving after combat already ended should still bump the counter.
@@ -201,15 +228,17 @@ public sealed class EncounterLearner : IDisposable
 
     public void Forget(FightMemory memory)
     {
+        if (disposed || !initialized || !memories.TryGetValue(memory.TerritoryId, out var current) || !ReferenceEquals(current, memory)) return;
         memories.Remove(memory.TerritoryId);
         try
         {
-            var path = PathFor(memory.TerritoryId);
-            if (File.Exists(path))
-                File.Delete(path);
+            pendingDeletes[memory.TerritoryId] = (persistence.Delete(memory.TerritoryId), false);
+            unreadableTerritories.Remove(memory.TerritoryId); // Explicit forgetting authorizes replacing this generation.
+            preparationErrors.Remove(memory.TerritoryId);
         }
         catch (Exception ex)
         {
+            preparationErrors[memory.TerritoryId] = "Could not queue learned-history deletion: " + ex.Message;
             Plugin.Log.Error(ex, "Could not delete learned data for territory {Id}.", memory.TerritoryId);
         }
     }
@@ -217,6 +246,7 @@ public sealed class EncounterLearner : IDisposable
     /// <summary>Clears the timings but keeps the fight, for when a patch retunes it.</summary>
     public void ForgetTimings(FightMemory memory)
     {
+        if (disposed || !initialized || !memories.TryGetValue(memory.TerritoryId, out var current) || !ReferenceEquals(current, memory)) return;
         memory.Casts.Clear();
         memory.PullCount = 0;
         memory.ClearCount = 0;
@@ -268,21 +298,47 @@ public sealed class EncounterLearner : IDisposable
         return "Zone " + territory;
     }
 
+    private void TryInitialize()
+    {
+        if (initialized || disposed || DateTime.UtcNow < nextInitializationUtc) return;
+        nextInitializationUtc = DateTime.UtcNow.AddMilliseconds(100);
+        try
+        {
+            if (persistence.TryReadUnderOwnership(LoadAll))
+            { initialized = true; initializationError = null; }
+        }
+        catch (Exception ex)
+        {
+            var message = "Learned history could not be loaded: " + ex.Message;
+            if (initializationError != message) Plugin.Log.Error(ex, "Could not load learned timing history.");
+            initializationError = message;
+        }
+    }
+
     private void LoadAll()
     {
+        // Initialization retries must replace any unpublished partial directory scan.
+        memories.Clear();
+        unreadableTerritories.Clear();
+        preparationErrors.Clear();
+        var settings = PlanJson.Readable();
+        settings.NullValueHandling = NullValueHandling.Include; // Explicit null must reach validation, not become an empty default list.
+        settings.DefaultValueHandling = DefaultValueHandling.Include;
         foreach (var file in Directory.EnumerateFiles(directory, "*.json"))
         {
             try
             {
                 var json = File.ReadAllText(file, Encoding.UTF8);
                 var memory = JsonConvert.DeserializeObject<FightMemory>(json, settings);
-                if (memory == null || memory.TerritoryId == 0)
-                    continue;
+                if (memory == null || memory.TerritoryId == 0 || memory.FormatVersion != FightMemory.CurrentFormatVersion ||
+                    Path.GetFileNameWithoutExtension(file) != memory.TerritoryId.ToString())
+                    throw new IOException("Learned history has an unsupported format or mismatched territory; its file was preserved.");
 
-                memory.Casts ??= new List<LearnedCast>();
+                // Validate before normalization or recomputation: explicit null/invalid lists
+                // are malformed history to preserve, not evidence that the fight was empty.
+                memory = LearnedPersistenceQueue.Capture(memory);
                 foreach (var cast in memory.Casts)
                 {
-                    cast.Samples ??= new List<float>();
                     cast.Recompute();
                 }
 
@@ -290,6 +346,11 @@ public sealed class EncounterLearner : IDisposable
             }
             catch (Exception ex)
             {
+                if (uint.TryParse(Path.GetFileNameWithoutExtension(file), out var territory) && territory != 0)
+                {
+                    unreadableTerritories.Add(territory);
+                    preparationErrors[territory] = "Learned history for territory " + territory + " could not be read; its file is preserved for recovery.";
+                }
                 Plugin.Log.Error(ex, "Could not read learned data from {File}.", file);
             }
         }
@@ -300,40 +361,75 @@ public sealed class EncounterLearner : IDisposable
 
     private void Save(FightMemory memory)
     {
+        if (!initialized) return;
         try
         {
-            var json = JsonConvert.SerializeObject(memory, settings);
-            File.WriteAllText(PathFor(memory.TerritoryId), json, Encoding.UTF8);
+            if (unreadableTerritories.Contains(memory.TerritoryId))
+                throw new IOException("Existing learned history is unreadable and was preserved. Recover it or explicitly forget this territory before replacing it.");
+            persistence.Save(memory);
+            pendingDeletes.Remove(memory.TerritoryId); // A new saved generation supersedes any older delete retry.
+            preparationErrors.Remove(memory.TerritoryId);
         }
         catch (Exception ex)
         {
+            preparationErrors[memory.TerritoryId] = "Could not prepare learned history: " + ex.Message;
             Plugin.Log.Error(ex, "Could not save learned data for {Name}.", memory.Name);
         }
     }
 
     public void SaveAll()
     {
-        foreach (var memory in memories.Values)
-            Save(memory);
+        if (disposed || !initialized) return;
+        SaveAllCore();
     }
 
-    private string PathFor(uint territory) => Path.Combine(directory, territory + ".json");
+    private void SaveAllCore()
+    {
+        if (!initialized) return;
+        PollStorage(Plugin.Framework);
+        foreach (var memory in memories.Values)
+            Save(memory);
+        foreach (var territory in pendingDeletes.Where(p => p.Value.Failed).Select(p => p.Key).ToArray())
+            pendingDeletes[territory] = (persistence.Delete(territory), false);
+    }
+
+    private void PollStorage(IFramework _)
+    {
+        TryInitialize();
+        while (persistence.TryTakeCompletion(out var result))
+        {
+            if (pendingDeletes.TryGetValue(result.TerritoryId, out var deletion) && deletion.Revision == result.Revision)
+            {
+                if (result.Outcome == LearnedSaveOutcome.Failed) pendingDeletes[result.TerritoryId] = (result.Revision, true);
+                else if (result.Outcome == LearnedSaveOutcome.Saved) pendingDeletes.Remove(result.TerritoryId);
+            }
+            if (result.Outcome == LearnedSaveOutcome.Failed)
+                Plugin.Log.Error(new IOException(result.Error), "Learned-history storage failed for territory {Territory}.", result.TerritoryId);
+        }
+    }
 
     public void Dispose() => Dispose(saveChanges: true);
 
     internal void Dispose(bool saveChanges)
     {
-        // Unhook first. Committing the pull touches disk, and a failure there must not leave us
-        // subscribed to events that will fire into an unloaded assembly.
+        if (disposed) return;
+        disposed = true;
+        // Unhook first, including partial construction. Workers only own detached data and IO.
         Plugin.Encounter.CombatStarted -= OnCombatStarted;
         Plugin.Encounter.CombatEnded -= OnCombatEnded;
         Plugin.Encounter.CastStarted -= OnCastStarted;
         Plugin.ClientState.TerritoryChanged -= OnTerritoryChanged;
+        Plugin.Framework.Update -= PollStorage;
 
-        if (saveChanges)
+        try
         {
-            CommitPull(cleared: false);
-            SaveAll();
+            if (saveChanges) { CommitPull(cleared: false); SaveAllCore(); }
+        }
+        finally
+        {
+            if (!persistence.FlushAsync(shutdownTimeout, stopAccepting: true, discardPending: !saveChanges).GetAwaiter().GetResult())
+                Plugin.Log.Warning("Learned history did not finish saving before shutdown: {Error}", StorageError ?? "storage is still busy");
+            PollStorage(Plugin.Framework);
         }
     }
 }

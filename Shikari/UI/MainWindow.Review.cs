@@ -22,17 +22,15 @@ public sealed partial class MainWindow
     private bool reviewPlaying;
     private bool reviewTrails = true;
     private bool reviewFocus;
+    private ReplayAttempt? initializedReviewAttempt;
 
     private void DrawReviewWorkspace()
     {
         var store = Plugin.Replays;
-        var attempts = store.Attempts;
-        var attempt = attempts.FirstOrDefault(a => a.Id == reviewAttemptId);
-        if (attempt == null && attempts.Count > 0)
-        {
-            attempt = attempts.OrderByDescending(a => a.StartedUtc).First();
-            SelectReviewAttempt(attempt);
-        }
+        var attempts = store.Catalog;
+        if (!attempts.Any(a => a.Id == reviewAttemptId) && attempts.Count > 0)
+            RequestReviewAttempt(attempts.OrderByDescending(a => a.StartedUtc).First().Id);
+        store.SetReviewSelection(reviewAttemptId, reviewCompareId);
 
         using (Plugin.Fonts.PushTitle())
             ImGui.TextUnformatted("MECHANIC REPLAY");
@@ -45,6 +43,12 @@ public sealed partial class MainWindow
 
         if (ImGui.CollapsingHeader("Recording & storage"))
         {
+            ImGui.TextWrapped($"{store.Catalog.Count} recordings · {store.Attempts.Count} open in memory · estimated {store.CachedBytes / (1024f * 1024f):0.0} MiB");
+            if (store.UnsavedCount > 0)
+            {
+                ImGui.TextWrapped($"{store.UnsavedCount} recording(s) waiting for a durable save. These copies stay in memory until saved or deleted.");
+                if (ImGui.Button("Retry replay saves")) store.RetrySaves();
+            }
             var enabled = Plugin.Config.ReplayEnabled;
             if (ImGui.Checkbox("Record mechanic replays locally", ref enabled))
             {
@@ -67,6 +71,7 @@ public sealed partial class MainWindow
                 if (ImGui.Button("Delete all"))
                 {
                     store.Clear();
+                    ReleaseReviewResources();
                     reviewAttemptId = string.Empty;
                     reviewPlaying = false;
                     ImGui.CloseCurrentPopup();
@@ -77,9 +82,10 @@ public sealed partial class MainWindow
             }
         }
         ImGui.Separator();
-        if (attempt == null || !store.Attempts.Any(a => a.Id == attempt.Id))
+        if (attempts.Count == 0)
         {
             ImGui.Spacing();
+            if (store.CatalogLoading) { ImGui.TextWrapped("Reading the saved replay library…"); return; }
             using (Plugin.Fonts.PushHeading()) ImGui.TextUnformatted("Your next pull starts the story.");
             ImGui.TextWrapped("Enable recording, open a plan and enter combat. After the pull, choose an attempt here to replay its mechanics against the plan captured at pull start.");
             ImGui.TextWrapped("Player positions need an aligned arena. Missing alignment is retained as a gap, so review never invents movement.");
@@ -87,14 +93,12 @@ public sealed partial class MainWindow
         }
 
         ImGui.SetNextItemWidth(MathF.Max(240f * UiHelpers.Scale, ImGui.GetContentRegionAvail().X - 135f * UiHelpers.Scale));
-        if (ImGui.BeginCombo("##review-attempt", ReviewAttemptLabel(attempt)))
+        var selected = attempts.FirstOrDefault(a => a.Id == reviewAttemptId);
+        if (ImGui.BeginCombo("##review-attempt", selected == null ? "Choose an attempt" : ReviewAttemptLabel(selected)))
         {
             foreach (var item in attempts.OrderByDescending(a => a.StartedUtc))
-                if (ImGui.Selectable(ReviewAttemptLabel(item) + "###attempt-" + item.Id, item.Id == attempt.Id))
-                {
-                    SelectReviewAttempt(item);
-                    attempt = item;
-                }
+                if (ImGui.Selectable(ReviewAttemptLabel(item) + "###attempt-" + item.Id, item.Id == reviewAttemptId))
+                    RequestReviewAttempt(item.Id);
             ImGui.EndCombo();
         }
         ImGui.SameLine();
@@ -104,7 +108,8 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("Permanently remove this attempt?");
             if (ImGui.Button("Delete"))
             {
-                store.Delete(attempt.Id);
+                store.Delete(reviewAttemptId);
+                ReleaseReviewResources();
                 reviewAttemptId = string.Empty;
                 reviewPlaying = false;
                 ImGui.CloseCurrentPopup();
@@ -113,6 +118,11 @@ public sealed partial class MainWindow
             if (ImGui.Button("Keep")) ImGui.CloseCurrentPopup();
             ImGui.EndPopup();
         }
+
+        if (!DrawReplayLoadState(reviewAttemptId, "attempt")) return;
+        var attempt = store.GetLoaded(reviewAttemptId);
+        if (attempt == null) return;
+        if (!ReferenceEquals(initializedReviewAttempt, attempt)) SelectReviewAttempt(attempt);
 
         if (reviewPlaying)
         {
@@ -139,12 +149,71 @@ public sealed partial class MainWindow
 
     private static string ReviewAttemptLabel(ReplayAttempt attempt) =>
         $"{attempt.StartedUtc.ToLocalTime():MMM d, HH:mm:ss}  /  {attempt.Plan.Name}  /  {attempt.Duration:0}s  /  {attempt.EndReason}";
+    private static string ReviewAttemptLabel(ReplayCatalogEntry attempt) =>
+        $"{attempt.StartedUtc.ToLocalTime():MMM d, HH:mm:ss}  /  {attempt.PlanName}  /  {attempt.Duration:0}s  /  {attempt.EndReason}";
+
+    private void RequestReviewAttempt(string id)
+    {
+        if (reviewAttemptId != id)
+        {
+            InvalidatePullValidation();
+            ReleaseReviewResources();
+            reviewAttemptId = id;
+            reviewCompareId = "";
+        }
+        Plugin.Replays.SetReviewSelection(id, reviewCompareId);
+        Plugin.Replays.RequestLoad(id);
+    }
+
+    private bool DrawReplayLoadState(string id, string label)
+    {
+        var state = Plugin.Replays.RequestLoad(id);
+        if (state == ReplayLoadState.Ready) return true;
+        if (id == reviewAttemptId && initializedReviewAttempt != null) ClearReviewPayloadCaches();
+        else if (id == reviewCompareId)
+        { evidenceTimelines.Remove(id); comparedLeft = null; comparedRight = null; }
+        reviewPlaying = false;
+        if (state == ReplayLoadState.Failed)
+        {
+            ImGui.TextWrapped($"The {label} could not be loaded. " + Plugin.Replays.LoadError(id));
+            if (ImGui.SmallButton("Retry loading##" + label)) Plugin.Replays.RetryLoad(id);
+        }
+        else ImGui.TextWrapped(state == ReplayLoadState.Missing ? "This recording is no longer in the library." : $"Loading {label}…");
+        return false;
+    }
+
+    private void ReleaseReviewResources()
+    {
+        Plugin.Replays.SetReviewSelection(null, null);
+        pendingAssignmentExample = null;
+        ClearReviewPayloadCaches();
+    }
+
+    private void ClearReviewPayloadCaches()
+    {
+        InvalidatePullValidation();
+        initializedReviewAttempt = null;
+        evidenceTimeline = null; evidenceTimelineAttempt = null; evidenceTimelines.Clear();
+        evidenceAttempt = ""; evidenceBoundsId = "";
+        comparedLeft = null; comparedRight = null;
+        reviewPlaying = false;
+    }
+
+    private void PruneReviewResources()
+    {
+        if (initializedReviewAttempt != null && !ReferenceEquals(initializedReviewAttempt, Plugin.Replays.GetLoaded(reviewAttemptId)))
+            ClearReviewPayloadCaches();
+        else PruneEvidenceTimelines();
+    }
 
     private void SelectReviewAttempt(ReplayAttempt attempt)
     {
-        InvalidatePullValidation();
+        var comparison = reviewAttemptId == attempt.Id ? reviewCompareId : "";
+        ReleaseReviewResources();
+        initializedReviewAttempt = attempt;
         reviewAttemptId = attempt.Id;
-        reviewCompareId = string.Empty;
+        reviewCompareId = comparison;
+        Plugin.Replays.SetReviewSelection(attempt.Id, reviewCompareId);
         reviewTime = 0;
         reviewMechanicIndex = 0;
         reviewSeat = attempt.LocalSlot;
@@ -250,19 +319,26 @@ public sealed partial class MainWindow
     {
         ImGui.Spacing();
         using (Plugin.Fonts.PushHeading()) ImGui.TextUnformatted("COMPARE ATTEMPTS");
-        var candidates = Plugin.Replays.Attempts.Where(a => a.Id != attempt.Id && a.Plan.Id == attempt.Plan.Id && MatchingReviewMechanic(a, mechanic) != null).ToList();
-        var comparison = candidates.FirstOrDefault(a => a.Id == reviewCompareId);
+        var candidates = Plugin.Replays.Catalog.Where(a => a.Id != attempt.Id && a.PlanId == attempt.Plan.Id &&
+            a.Mechanics.Any(m => m.ActionId == mechanic.ActionId && m.Occurrence == mechanic.Occurrence &&
+                (mechanic.ActionId != 0 || m.EntryId == mechanic.EntryId))).ToList();
+        var selected = candidates.FirstOrDefault(a => a.Id == reviewCompareId);
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.BeginCombo("##review-compare", comparison == null ? "Choose another attempt" : comparison.StartedUtc.ToLocalTime().ToString("MMM d, HH:mm:ss")))
+        if (ImGui.BeginCombo("##review-compare", selected == null ? "Choose another attempt" : selected.StartedUtc.ToLocalTime().ToString("MMM d, HH:mm:ss")))
         {
-            if (ImGui.Selectable("None", comparison == null)) reviewCompareId = string.Empty;
+            if (ImGui.Selectable("None", selected == null)) reviewCompareId = string.Empty;
             foreach (var candidate in candidates)
                 if (ImGui.Selectable(ReviewAttemptLabel(candidate) + "###compare-" + candidate.Id, candidate.Id == reviewCompareId)) reviewCompareId = candidate.Id;
             ImGui.EndCombo();
         }
+        Plugin.Replays.SetReviewSelection(reviewAttemptId, reviewCompareId);
+        PruneEvidenceTimelines();
         if (candidates.Count == 0) ImGui.TextWrapped("Another attempt of this plan and mechanic occurrence will appear here.");
-        if (comparison == null) return;
-        var other = MatchingReviewMechanic(comparison, mechanic)!;
+        if (!candidates.Any(a => a.Id == reviewCompareId) || !DrawReplayLoadState(reviewCompareId, "comparison")) return;
+        var comparison = Plugin.Replays.GetLoaded(reviewCompareId);
+        if (comparison == null || comparison.Plan.Id != attempt.Plan.Id) return;
+        var other = MatchingReviewMechanic(comparison, mechanic);
+        if (other == null) return;
         var comparisonTime = other.Time + reviewTime - mechanic.Time;
         if (comparisonTime < 0 || comparisonTime > comparison.Duration)
         {
@@ -336,7 +412,8 @@ public sealed partial class MainWindow
                     draw.AddLine(reviewCanvas.ToScreen(trail[i - 1]), reviewCanvas.ToScreen(trail[i]), color, 2f * UiHelpers.Scale);
             }
         }
-        var comparison = Plugin.Replays.Attempts.FirstOrDefault(a => a.Id == reviewCompareId && a.Plan.Id == attempt.Plan.Id);
+        var comparison = Plugin.Replays.GetLoaded(reviewCompareId);
+        if (comparison?.Plan.Id != attempt.Plan.Id) comparison = null;
         var other = comparison == null || mechanic == null ? null : MatchingReviewMechanic(comparison, mechanic);
         if (comparison != null && other != null && mechanic != null && CompatibleReplayBoards(attempt, comparison))
         {
@@ -356,13 +433,12 @@ public sealed partial class MainWindow
     }
 
     // Cache by immutable attempt identity: comparison must not serialize large plans every frame.
-    private string comparedBoardsKey = string.Empty;
+    private ReplayAttempt? comparedLeft, comparedRight;
     private bool comparedBoardsCompatible;
     private bool CompatibleReplayBoards(ReplayAttempt left, ReplayAttempt right)
     {
-        var key = left.Id + right.Id;
-        if (key == comparedBoardsKey) return comparedBoardsCompatible;
-        comparedBoardsKey = key;
+        if (ReferenceEquals(left, comparedLeft) && ReferenceEquals(right, comparedRight)) return comparedBoardsCompatible;
+        comparedLeft = left; comparedRight = right;
         comparedBoardsCompatible =
             Newtonsoft.Json.JsonConvert.SerializeObject(left.Plan.Arena) == Newtonsoft.Json.JsonConvert.SerializeObject(right.Plan.Arena) &&
             Newtonsoft.Json.JsonConvert.SerializeObject(left.Plan.Slides) == Newtonsoft.Json.JsonConvert.SerializeObject(right.Plan.Slides);

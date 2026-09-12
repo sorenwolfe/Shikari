@@ -20,6 +20,22 @@ public sealed partial class MainWindow
         var learner = Plugin.Learner;
         var memory = learner.Current;
 
+        if (learner.IsLoading)
+        {
+            ImGui.TextWrapped("Loading learned timings… Learning resumes with the next pull.");
+            if (learner.StorageError is { Length: > 0 } loadingError) ImGui.TextWrapped(loadingError);
+            return;
+        }
+
+        if (learner.StorageError is { Length: > 0 } error)
+        {
+            ImGui.TextWrapped(error);
+            ImGui.BeginDisabled(Plugin.Encounter.InCombat || learner.IsSaving);
+            if (ImGui.Button("Retry saving learned timings")) learner.SaveAll();
+            ImGui.EndDisabled();
+        }
+        else if (learner.IsSaving) ImGui.TextDisabled("Saving learned timings…");
+
         ImGui.TextWrapped(
             "Shikari watches your pulls and remembers when each cast happens. Once it has seen a " +
             "fight a few times it can call a mechanic before the boss starts casting it — which is " +

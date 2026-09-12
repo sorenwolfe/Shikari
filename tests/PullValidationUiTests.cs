@@ -83,7 +83,7 @@ namespace Shikari
     }
     public sealed class TestConfig { public uint ThemeAccent; }
     public sealed class TestEncounter { public bool InCombat; }
-    public sealed class TestReplays { public long EvidenceRevision; public List<ReplayAttempt> Attempts = new(); }
+    public sealed class TestReplays { public long EvidenceRevision; public List<ReplayAttempt> Attempts = new(); public ReplayAttempt? GetLoaded(string id) => Attempts.FirstOrDefault(a => a.Id == id); }
 }
 namespace Shikari.Services.Live
 {

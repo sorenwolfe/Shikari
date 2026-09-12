@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Plugin.Services;
-using Newtonsoft.Json;
 using Shikari.Model;
 
 namespace Shikari.Services.Adaptive;
@@ -41,7 +40,7 @@ public sealed class AdaptiveService : IDisposable
         sourcePlan = Plugin.Plans.Active;
         try
         {
-            var frozen = JsonConvert.DeserializeObject<PlanDocument>(JsonConvert.SerializeObject(sourcePlan, PlanJson.Compact()), PlanJson.Compact());
+            var frozen = sourcePlan == null ? null : AdaptiveRuleSnapshot.Capture(sourcePlan, Plugin.ClientState.TerritoryType);
             engine = frozen == null ? null : new AdaptiveEngine(frozen, Plugin.ClientState.TerritoryType);
             Status = engine?.ActiveRuleCount > 0 ? "Waiting for a matching cast and a new status assignment." :
                 "No valid, non-overlapping enabled rules for this territory. Capturing statuses for discovery.";

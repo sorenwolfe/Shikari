@@ -11,6 +11,7 @@ public sealed record AssignmentExample(string SourceKey, string AttemptId, long 
     int Occurrence, float Time, int BranchIndex, AssignmentOutcome Outcome, bool ScopeVerified, string Reason,
     float? Distance, string PositionReason);
 public sealed record AssignmentBranchCoverage(int Index, string Label, int Recordings, int Examples);
+public sealed record ReplayAuditInput(ReplayAttempt? Attempt = null, string Error = "");
 public sealed class AdaptiveCoverage
 {
     public int Recordings { get; set; }
@@ -33,15 +34,26 @@ public static class AdaptiveEvidenceAudit
     /// <summary>Cooperative work, yielding after validation and each actor/cast example. The caller
     /// must cancel if the inputs change; the final yielded report is complete only when enumeration ends.</summary>
     public static IEnumerable<AdaptiveCoverage> AnalyseIncrementally(PlanDocument plan, AdaptiveMechanic rule, IReadOnlyList<ReplayAttempt> recordings)
+        => AnalyseStreaming(plan, rule, recordings.Select(a => new ReplayAuditInput(a)), recordings.Count);
+
+    /// <summary>A null attempt with no error yields while its payload loads. The enumerator
+    /// owns at most one recording; catalog entries never stand in for actual evidence.</summary>
+    public static IEnumerable<AdaptiveCoverage> AnalyseStreaming(PlanDocument plan, AdaptiveMechanic rule,
+        IEnumerable<ReplayAuditInput> recordings, int catalogCount)
     {
         var result = new AdaptiveCoverage();
         if (!rule.IsValid(plan)) { result.Message = "Set valid conditions and destination boards before checking recordings."; yield return result; yield break; }
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var relevantStatuses = rule.Branches.SelectMany(b => b.AdditionalStatuses.Select(c => c.StatusId).Append(b.StatusId)).ToHashSet();
         var geometry = new Dictionary<(string, string), bool>();
-        foreach (var attempt in recordings.Take(MaxRecordings))
+        var visited = 0;
+        foreach (var input in recordings)
         {
             yield return result;
+            if (input.Attempt == null && input.Error.Length == 0) continue;
+            if (visited++ >= MaxRecordings) break;
+            if (input.Error.Length > 0) { Exclude(result, input.Error); continue; }
+            var attempt = input.Attempt!;
             if (result.Examples.Count >= MaxExamples) { result.Message = "Example limit reached; this report covers the first 512 actor/mechanic examples."; break; }
             if (!ReplayValidation.IsValid(attempt)) { Exclude(result, "Invalid or unsupported recording"); continue; }
             if (attempt.Plan.Id != plan.Id) { Exclude(result, "Different strategy"); continue; }
@@ -123,7 +135,7 @@ public static class AdaptiveEvidenceAudit
             result.Branches.Add(new(i, rule.Branches[i].Label, examples.Select(e => e.SourceKey).Distinct().Count(), examples.Length));
         }
         if (result.Examples.Count >= MaxExamples) result.Message = "Example limit reached; this report covers the first 512 actor/mechanic examples.";
-        if (recordings.Count > MaxRecordings) result.Message += " Only the 30 retained recording slots are analyzed.";
+        if (catalogCount > MaxRecordings) result.Message += " Only the 30 retained recording slots are analyzed.";
         yield return result;
     }
 

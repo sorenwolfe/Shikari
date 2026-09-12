@@ -23,11 +23,16 @@ namespace Shikari.Tests
             attempt.Evidence.Actors.Add(new EvidenceActor { Id = 42, SlotIndex = 0 });
             attempt.Evidence.Statuses.Add(new EvidenceStatus { ActorId = 42, StatusId = 10, Time = 2, Duration = 30 });
             Plugin.Replays.Attempts.Add(attempt);
+            Plugin.Replays.HoldLoads = true;
             var window = new MainWindow();
             window.DrawCoverage(plan, rule);
             Check(window.CachedCount == 0, "Drawing Adaptive must not scan all recordings every frame.");
             Dalamud.Bindings.ImGui.ImGui.Press = "Check recordings"; window.DrawCoverage(plan, rule);
             Check(window.CachedCount == 0, "Starting a check should schedule bounded work, not scan the retained corpus inside the button handler.");
+            for (var frame = 0; frame < 5; frame++) window.DrawCoverage(plan, rule);
+            Check(window.CheckRunning && window.CachedCount == 0 && Plugin.Replays.LoadRequests > 0,
+                "An unloaded catalog entry must wait for an asynchronous payload, not finish as an empty corpus.");
+            Plugin.Replays.HoldLoads = false;
             for (var frame = 0; frame < 100 && window.CachedCount == 0; frame++) window.DrawCoverage(plan, rule);
             Check(window.CachedCount == 1, "An explicit check should eventually cache its complete analysis.");
             Plugin.Replays.EvidenceRevision++;
@@ -69,10 +74,23 @@ namespace Shikari.Tests
             Check(!window.CheckRunning && window.CachedCount == 0, "A replacement plan with the same ID cannot inherit a running check.");
             Plugin.Replays.Attempts.RemoveRange(1, 29);
             var example = AdaptiveEvidenceAudit.Analyse(plan, rule, Plugin.Replays.Attempts).Examples.Single();
+            Plugin.Replays.HoldLoads = true;
             window.OpenExample(rule, example);
+            Check(window.SelectedAttempt == "", "Opening an unloaded example waits without selecting a fabricated payload.");
+            Plugin.Replays.HoldLoads = false;
+            window.DrawCoverage(plan, rule);
             Check(window.SelectedAttempt == attempt.Id && window.SelectedActor == 42 && window.SelectedWorkspace == 2 &&
                 window.SelectedTime == example.Time && window.SelectedSeat == 0,
                 "A coverage example must open the exact recording, source actor, mechanic time and plan seat in Review.");
+            Plugin.Replays.CatalogLoading = true;
+            Dalamud.Bindings.ImGui.ImGui.Press = "Check recordings"; window.DrawCoverage(plan, rule);
+            Check(!window.CheckRunning, "A partial startup catalog must not be reported as the complete corpus.");
+            Plugin.Replays.CatalogLoading = false;
+            Plugin.Replays.FailLoads = true;
+            Dalamud.Bindings.ImGui.ImGui.Press = "Check recordings"; window.DrawCoverage(plan, rule);
+            for (var frame = 0; frame < 100 && window.CachedCount == 0; frame++) window.DrawCoverage(plan, rule);
+            Check(window.CachedCount == 1 && window.ExcludedCount == 1,
+                "A failed payload load must be counted as an excluded recording rather than silently treated as absent evidence.");
             Console.WriteLine("Adaptive coverage UI lifecycle checks passed.");
         }
     }
@@ -80,7 +98,17 @@ namespace Shikari.Tests
 namespace Shikari
 {
     internal static class Plugin { public static FakeReplays Replays { get; } = new(); public static FakeEncounter Encounter { get; } = new(); }
-    internal sealed class FakeReplays { public List<ReplayAttempt> Attempts { get; } = new(); public long EvidenceRevision { get; set; } }
+    internal sealed class FakeReplays
+    {
+        public List<ReplayAttempt> Attempts { get; } = new();
+        public IReadOnlyList<ReplayCatalogEntry> Catalog => Attempts.Select(ReplayCatalogEntry.From).ToArray();
+        public long EvidenceRevision { get; set; }
+        public bool HoldLoads, FailLoads;
+        public bool CatalogLoading;
+        public int LoadRequests;
+        public ReplayAttempt? GetLoaded(string id) => HoldLoads || FailLoads ? null : Attempts.FirstOrDefault(a => a.Id == id);
+        public ReplayLoadState RequestLoad(string id) { LoadRequests++; return FailLoads ? ReplayLoadState.Failed : HoldLoads ? ReplayLoadState.Loading : ReplayLoadState.Ready; }
+    }
     internal sealed class FakeEncounter { public bool InCombat; }
 }
 namespace Shikari.UI
@@ -91,16 +119,19 @@ namespace Shikari.UI
         private long evidenceActor;
         private float reviewTime;
         private bool reviewPlaying;
-        private string selectedAttempt = "", evidenceSlide = "";
+        private string selectedAttempt = "", evidenceSlide = "", reviewAttemptId = "";
         private AdaptiveMechanic? evidenceDraft;
         private readonly HashSet<uint> evidenceSelection = new();
         public bool IsOpen { get; set; }
         private void SelectReviewAttempt(ReplayAttempt attempt) { selectedAttempt = attempt.Id; reviewTime = 0; }
+        private void RequestReviewAttempt(string id) { reviewAttemptId = id; Plugin.Replays.RequestLoad(id); }
+        private void ReleaseReviewResources() { }
         private EvidenceTimeline TimelineFor(ReplayAttempt attempt) => new(attempt.Evidence);
         public void DrawCoverage(PlanDocument plan, AdaptiveMechanic rule) { AdvanceAssignmentCheck(plan); DrawAssignmentCoverage(plan, rule); }
         public void EditPlan() => InvalidateAssignmentCoverage();
         public void OpenExample(AdaptiveMechanic rule, AssignmentExample example) => OpenAssignmentExample(rule, example);
         public int CachedCount => assignmentCoverage.Count;
+        public int ExcludedCount => assignmentCoverage.Values.Single().Result.ExcludedRecordings;
         public bool CheckRunning => assignmentCheck != null;
         public string SelectedAttempt => selectedAttempt;
         public long SelectedActor => evidenceActor;

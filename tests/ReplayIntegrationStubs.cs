@@ -147,8 +147,10 @@ namespace Shikari.Tests
             Check(System.IO.File.Exists(System.IO.Path.Combine(directory, "replays", id + ".json")), "Replay persisted");
             using (var store = new ReplayStore())
             {
-                for (int i = 0; i < 100 && store.Attempts.Count == 0; i++) { Thread.Sleep(10); Plugin.Framework.Tick(); }
-                Check(store.Attempts.Count == 1, "Persisted replay loads");
+                WaitForStorage(store, "loading"); Plugin.Framework.Tick();
+                Check(store.Catalog.Count == 1 && store.Attempts.Count == 0, "Persisted replay enters the catalog without loading its payload");
+                store.RequestLoad(id);
+                Check(SpinWait.SpinUntil(() => { Plugin.Framework.Tick(); return store.GetLoaded(id) != null; }, 5000), "Persisted replay loads on request");
                 Check(store.Attempts[0].StatusObservations.Count == 1 && store.Attempts[0].AdaptiveDecisions[0].Reason == "Long duration", "Adaptive evidence survives disk reload");
                 var evidenceCount = plan.StrategyEvidence.Count;
                 var saveCount = Plugin.Plans.Saves;
@@ -185,9 +187,11 @@ namespace Shikari.Tests
                 Plugin.Encounter.Begin(); Plugin.Framework.Tick(); Plugin.Encounter.Cast(); store.Dispose();
                 Check(replacement.StrategyEvidence.Count == evidenceCount && Plugin.Plans.Saves == saveCount,
                     "Plugin unload must save the recording without automatic strategy enrichment");
-                store.Clear();
-                WaitForStorage(store, "writes");
-                Check(store.Attempts.Count == 0, "Clear removes attempts");
+                using var cleanup = new ReplayStore();
+                WaitForStorage(cleanup, "loading"); Plugin.Framework.Tick();
+                cleanup.Clear();
+                WaitForStorage(cleanup, "writes");
+                Check(cleanup.Attempts.Count == 0 && cleanup.Catalog.Count == 0, "Clear removes attempts");
             }
             Check(System.IO.Directory.GetFiles(System.IO.Path.Combine(directory, "replays"), "*.json").Length == 0, "Clear persists");
             Console.WriteLine("PASS: recording lifecycle, duplicate end, cast anchoring, persistence, reload, zone change, clear");
@@ -272,7 +276,7 @@ namespace Shikari.Tests
             using var store = new ReplayStore();
             WaitForStorage(store, "loading"); Plugin.Framework.Tick();
             Check(File.Exists(ReplayPath(directory, older)), "Invalid or unsupported newest replay must not erase an older usable replay");
-            Check(store.Attempts.Count == 1 && store.Attempts[0].Id == older.Id, "Retention must count successfully loaded replays");
+            Check(store.Catalog.Count == 1 && store.Catalog[0].Id == older.Id && store.Attempts.Count == 0, "Retention must count validated catalog entries without retaining their full payloads");
             Check(File.Exists(ReplayPath(directory, newer)), "Rejected newest replay must remain available for recovery or a newer reader");
             Check(!File.Exists(ReplayPath(directory, excess)), "Startup must still trim excess validated replay files");
             Check(File.Exists(ReplayPath(directory, futureOlder)), "Unsupported older replay files must also remain available for a newer reader");
@@ -313,7 +317,7 @@ namespace Shikari.Tests
             Check(Directory.GetFiles(Path.Combine(directory, "replays"), "*.json").Length == 3, "Initial retention must keep all three durable replays");
             Plugin.Config.ReplayRetention = 1;
             Plugin.Framework.Tick(); WaitForStorage(store, "writes");
-            Check(store.Attempts.Count == 1 && store.Attempts[0].Id == newest.Id &&
+            Check(store.Catalog.Count == 1 && store.Catalog[0].Id == newest.Id &&
                 File.Exists(ReplayPath(directory, newest)) && !File.Exists(ReplayPath(directory, first)) && !File.Exists(ReplayPath(directory, second)),
                 "Lower retention must trim both memory and durable storage without waiting for another pull");
         }
@@ -343,8 +347,8 @@ namespace Shikari.Tests
             var newest = StoredAttempt(DateTime.UtcNow);
             store.AddImported(oldest); store.AddImported(recent);
             store.SaveEvidence(oldest);
-            store.AddImported(newest); WaitForStorage(store, "writes");
-            Check(store.Attempts.Count == 2 && store.Attempts[0].Id == newest.Id && store.Attempts[1].Id == recent.Id &&
+            store.AddImported(newest); WaitForStorage(store, "writes"); Plugin.Framework.Tick();
+            Check(store.Catalog.Count == 2 && store.Catalog[0].Id == newest.Id && store.Catalog[1].Id == recent.Id &&
                 !File.Exists(ReplayPath(directory, oldest)) && File.Exists(ReplayPath(directory, recent)) && File.Exists(ReplayPath(directory, newest)),
                 "Editing old evidence must not make disk retention evict a different replay than memory retention");
         }
@@ -363,7 +367,7 @@ namespace Shikari.Tests
             using var store = new ReplayStore();
             WaitForStorage(store, "loading"); Plugin.Framework.Tick();
             store.AddImported(newest); WaitForStorage(store, "writes");
-            Check(store.Attempts.Count == 2 && store.Attempts[0].Id == newest.Id && store.Attempts[1].Id == recent.Id &&
+            Check(store.Catalog.Count == 2 && store.Catalog[0].Id == newest.Id && store.Catalog[1].Id == recent.Id &&
                 !File.Exists(ReplayPath(directory, oldest)) && File.Exists(ReplayPath(directory, recent)) && File.Exists(ReplayPath(directory, newest)),
                 "Reloading an edited older replay must preserve the same retention order in memory and storage");
         }

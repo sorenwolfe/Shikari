@@ -5,6 +5,8 @@ $sources += @('RecordedCast','ReplayAttempt','ReplayBuffer','ReplayValidation','
 $sources += "$root/Shikari/Services/Adaptive/AdaptiveEngine.cs", "$root/Shikari/Services/PlanJson.cs", "$root/Shikari/Services/Live/WorldAlignment.cs"
 $sources += "$root/Shikari/UI/MainWindow.AssignmentCoverage.cs", "$PSScriptRoot/AdaptiveCoverageUiTests.cs"
 $sources += "$root/Shikari/Services/Replay/EvidenceActorIdentity.cs"
+$sources += "$root/Shikari/Services/Storage/PlanSnapshot.cs"
+$sources += "$root/Shikari/Services/Replay/ReplayCatalog.cs"
 $refs = @(Get-ChildItem "$PSHOME/ref/*.dll" | ForEach-Object FullName) + "$PSHOME/Newtonsoft.Json.dll"
 Add-Type -Path $sources -ReferencedAssemblies $refs -CompilerOptions '/nullable:enable','/nowarn:1701,0169,0414,0649'
 [Shikari.Tests.AdaptiveCoverageUiTests]::Run()

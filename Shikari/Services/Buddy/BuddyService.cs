@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
-using Newtonsoft.Json;
 using Shikari.Model;
+using Shikari.Services.Adaptive;
 
 namespace Shikari.Services.Buddy;
 
@@ -52,8 +52,7 @@ public sealed class BuddyService : IDisposable
         {
             // Match AdaptiveService's pull snapshot. Mid-pull edits cannot advertise a rule
             // which the actual evaluator never armed.
-            var frozen = JsonConvert.DeserializeObject<PlanDocument>(JsonConvert.SerializeObject(plan, PlanJson.Compact()), PlanJson.Compact());
-            if (frozen == null) return;
+            var frozen = AdaptiveRuleSnapshot.Capture(plan, Plugin.ClientState.TerritoryType);
             var candidates = frozen.AdaptiveMechanics.Take(128)
                 .Where(r => r != null && r.Enabled && r.TerritoryId == Plugin.ClientState.TerritoryType && r.IsValid(frozen)).ToList();
             rules.AddRange(candidates.Where(r => candidates.Count(other => r.Overlaps(other)) == 1));
