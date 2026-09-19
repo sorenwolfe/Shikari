@@ -26,6 +26,7 @@ internal static class ReplaySnapshot
         Evidence = new ReplayEvidence { Source = a.Evidence.Source, Url = a.Evidence.Url, ReportCode = a.Evidence.ReportCode,
             FightId = a.Evidence.FightId, EncounterId = a.Evidence.EncounterId, Complete = a.Evidence.Complete,
             EffectsComplete = a.Evidence.EffectsComplete, CalibrationSlideId = a.Evidence.CalibrationSlideId,
+            EffectTargetActorIds = a.Evidence.EffectTargetActorIds?.ToList(),
             Warnings = a.Evidence.Warnings.ToList(),
             Actors = a.Evidence.Actors.Select(p => new EvidenceActor { Id = p.Id, GameObjectId = p.GameObjectId,
                 Name = p.Name, Job = p.Job, JobId = p.JobId, SlotIndex = p.SlotIndex, IsLocal = p.IsLocal }).ToList(),

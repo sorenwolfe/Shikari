@@ -28,7 +28,21 @@ public static class LogReplayBuilder
         evidence.Warnings.AddRange(source.Warnings.Take(90));
         var participating = source.StatusEvents.Select(e => e.TargetId).Concat(source.Positions.Select(e => e.ActorId))
             .Concat(data.PlayerCasts.Select(c => c.SourceId)).ToHashSet();
-        foreach (var actor in data.Actors.Where(a => a.IsPlayer && participating.Contains(a.Id)).Take(32))
+        if (source.EffectTargetActorIds is { } scope)
+        {
+            if (scope.Count > 32 || scope.Any(id => id <= 0) || scope.Distinct().Count() != scope.Count)
+                throw new InvalidOperationException("The log player scope is invalid. Reimport the selected fight.");
+            evidence.EffectTargetActorIds = scope.OrderBy(id => id).ToList();
+            participating = scope.ToHashSet();
+        }
+        var players = data.Actors.Where(a => a.Id > 0).GroupBy(a => a.Id)
+            .Where(g => g.Count() == 1 && g.Single().IsPlayer && participating.Contains(g.Key)).Select(g => g.Single()).ToArray();
+        if (players.Length > 32 || evidence.EffectTargetActorIds is { } targets && targets.Any(id => !players.Any(a => a.Id == id)))
+        {
+            evidence.EffectsComplete = false;
+            evidence.Warnings.Add("Some selected-fight players could not be verified in the actor metadata; player damage evidence is incomplete.");
+        }
+        foreach (var actor in players.Take(32))
         {
             var job = jobId(actor.Job);
             // Duplicate jobs stay unassigned until the user chooses a seat in Review.
@@ -40,8 +54,8 @@ public static class LogReplayBuilder
         foreach (var group in evidence.Actors.Where(a => a.SlotIndex >= 0).GroupBy(a => a.SlotIndex).Where(g => g.Count() > 1))
             foreach (var actor in group) actor.SlotIndex = -1;
         var actorIds = evidence.Actors.Select(a => a.Id).ToHashSet();
-        // The effect channel adds no roster members. Only targets already established as
-        // participating players can become position-check evidence; enemy identity is retained.
+        // Membership comes from independently verified fight metadata (or legacy observations),
+        // never from a damage target alone. Preserve enemy identity on each retained effect.
         foreach (var item in source.Effects.Where(e => actorIds.Contains(e.TargetId)).OrderBy(e => e.Time))
         {
             if (evidence.Effects.Count >= ReplayEvidence.MaxEffects)
@@ -85,6 +99,10 @@ public static class LogReplayBuilder
                 var observation = new RecordedCast { Source = "FF Logs", ActionId = cast.AbilityId,
                     CasterId = cast.SourceId > 0 ? (ulong)cast.SourceId : null,
                     TargetId = cast.TargetId is > 0 ? (ulong)cast.TargetId.Value : null,
+                    CasterInstance = cast.SourceInstance, TargetInstance = cast.TargetInstance,
+                    CompletionCasterInstance = cast.CompletionSourceInstance,
+                    CompletionTargetId = cast.CompletionTargetId is > 0 ? (ulong)cast.CompletionTargetId.Value : null,
+                    CompletionTargetInstance = cast.CompletionTargetInstance,
                     ObservedTime = cast.TimeSeconds, StartTime = hasStart ? cast.TimeSeconds : null,
                     CompletionTime = cast.CompletionTimeSeconds,
                     Occurrence = hasStart ? counts.GetValueOrDefault(cast.AbilityId) + 1 : null };

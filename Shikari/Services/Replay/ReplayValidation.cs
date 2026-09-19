@@ -37,6 +37,10 @@ public static class ReplayValidation
             evidence.References.Any(r => r == null || !float.IsFinite(r.Source.X) || !float.IsFinite(r.Source.Y) ||
                 !float.IsFinite(r.Board.X) || !float.IsFinite(r.Board.Y))) return false;
         var evidenceActors = evidence.Actors.Select(a => a.Id).ToHashSet();
+        if (evidence.EffectTargetActorIds is { } scope && (evidence.Source != "FF Logs" || scope.Count > 32 ||
+            scope.Any(id => id <= 0) || scope.Distinct().Count() != scope.Count ||
+            evidence.EffectsComplete && scope.Any(id => !evidenceActors.Contains(id)) ||
+            evidence.Effects.Any(e => e != null && (e.TargetId > int.MaxValue || !scope.Contains((int)e.TargetId))))) return false;
         if (evidence.Effects.Any(e => e == null || !float.IsFinite(e.Time) || e.Time < 0 || e.Time > attempt.Duration ||
                 e.ActionId == 0 || e.SourceId <= 0 || !evidenceActors.Contains(e.TargetId) ||
                 e.Type is not ("calculateddamage" or "damage") || e.Name == null || e.Name.Length > 256 ||

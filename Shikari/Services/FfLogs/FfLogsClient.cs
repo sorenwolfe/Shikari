@@ -177,6 +177,11 @@ public sealed class FfLogsClient : IDisposable
         query {
           reportData {
             report(code: "{{Escape(code)}}") {
+              fights(fightIDs: [{{fight.Id}}]) {
+                id startTime endTime friendlyPlayers
+                enemyNPCs { id instanceCount }
+                friendlyNPCs { id instanceCount }
+              }
               masterData {
                 actors { id name type subType }
                 abilities { gameID name }
@@ -206,8 +211,9 @@ public sealed class FfLogsClient : IDisposable
                 abilityNames[id.Value] = name;
         }
 
-        var enemy = await GetCastsAsync(clientId, secret, code, fight, "Enemies", cancel).ConfigureAwait(false);
-        var friendly = await GetCastsAsync(clientId, secret, code, fight, "Friendlies", cancel).ConfigureAwait(false);
+        var uniqueActors = SingleInstanceActors(masterJson.SelectToken("data.reportData.report") as JObject, fight);
+        var enemy = await GetCastsAsync(clientId, secret, code, fight, "Enemies", uniqueActors, cancel).ConfigureAwait(false);
+        var friendly = await GetCastsAsync(clientId, secret, code, fight, "Friendlies", uniqueActors, cancel).ConfigureAwait(false);
 
         foreach (var cast in enemy.Concat(friendly))
         {
@@ -226,18 +232,56 @@ public sealed class FfLogsClient : IDisposable
         };
     }
 
-    private async Task<List<LogCast>> GetCastsAsync(
-        string clientId, string secret, string code, LogFight fight, string hostility, CancellationToken cancel)
+    private static JObject? SelectedFight(JObject? report, LogFight fight)
     {
-        var results = new List<LogCast>();
+        if (report?["fights"] is not JArray fights) return null;
+        var matches = fights.OfType<JObject>().Where(f => LogEvidenceParser.Integer(f["id"], 1, int.MaxValue) == fight.Id).ToArray();
+        return matches.Length == 1 && LogEvidenceParser.Number(matches[0]["startTime"], out var start) && start == fight.StartTime &&
+            LogEvidenceParser.Number(matches[0]["endTime"], out var end) && end == fight.EndTime ? matches[0] : null;
+    }
+
+    private static HashSet<int>? PlayerScope(JObject? report, LogFight fight)
+    {
+        if (SelectedFight(report, fight)?["friendlyPlayers"] is not JArray ids || ids.Count > 32 ||
+            report?["masterData"] is not JObject metadata || metadata["actors"] is not JArray actors) return null;
+        var byId = actors.OfType<JObject>().GroupBy(a => LogEvidenceParser.Integer(a["id"], 1, int.MaxValue))
+            .Where(g => g.Key.HasValue).ToDictionary(g => (int)g.Key!.Value, g => g.ToArray());
+        var result = new HashSet<int>();
+        foreach (var token in ids)
+        {
+            var id = LogEvidenceParser.Integer(token, 1, int.MaxValue);
+            if (id == null || !result.Add((int)id.Value) || !byId.TryGetValue((int)id.Value, out var rows) || rows.Length != 1 ||
+                rows[0]["type"]?.Type != JTokenType.String || !string.Equals(rows[0].Value<string>("type"), "Player", StringComparison.OrdinalIgnoreCase)) return null;
+        }
+        return result;
+    }
+
+    private static HashSet<int> SingleInstanceActors(JObject? report, LogFight fight)
+    {
+        var metadata = report?["masterData"] as JObject;
+        var actors = (metadata?["actors"] as JArray ?? new()).OfType<JObject>()
+            .GroupBy(a => LogEvidenceParser.Integer(a["id"], 1, int.MaxValue)).Where(g => g.Key.HasValue && g.Count() == 1)
+            .ToDictionary(g => (int)g.Key!.Value, g => g.Single()["type"]?.Type == JTokenType.String ? g.Single().Value<string>("type") : null);
+        var result = actors.Where(a => string.Equals(a.Value, "Player", StringComparison.OrdinalIgnoreCase)).Select(a => a.Key).ToHashSet();
+        var selected = SelectedFight(report, fight);
+        var npcs = new[] { "enemyNPCs", "friendlyNPCs" }.SelectMany(key => (selected?[key] as JArray ?? new()).OfType<JObject>())
+            .GroupBy(a => LogEvidenceParser.Integer(a["id"], 1, int.MaxValue));
+        foreach (var group in npcs)
+            if (group.Key is { } id && group.Count() == 1 && LogEvidenceParser.Integer(group.Single()["instanceCount"], 1, int.MaxValue) == 1 &&
+                actors.TryGetValue((int)id, out var type) && string.Equals(type, "NPC", StringComparison.OrdinalIgnoreCase)) result.Add((int)id);
+        return result;
+    }
+
+    private async Task<List<LogCast>> GetCastsAsync(
+        string clientId, string secret, string code, LogFight fight, string hostility, IReadOnlySet<int> uniqueActors, CancellationToken cancel)
+    {
+        var parser = new LogCastParser(fight, hostility == "Enemies", uniqueActors);
         var startTime = (double)fight.StartTime;
         var pages = 0;
         var count = 0;
         var finished = false;
 
-        // begincast marks the bar going up, cast marks it resolving. Pair them so a step knows how
-        // long its cast bar is; abilities with no begincast are instants.
-        var pending = new Dictionary<(int Source, uint Ability), float>();
+        // A cast event is completion evidence, not proof of a damage/effect resolution.
 
         while (pages++ < 20)
         {
@@ -273,75 +317,8 @@ public sealed class FfLogsClient : IDisposable
                 throw new FfLogsException("FF Logs cast history exceeded the event limit. Choose a shorter pull.");
             count += rows.Count;
 
-            foreach (var row in rows)
-            {
-                var type = row.Value<string>("type") ?? string.Empty;
-                var abilityId = row.Value<uint?>("abilityGameID") ?? 0;
-                var source = row.Value<int?>("sourceID") ?? 0;
-                var target = LogEvidenceParser.Integer(row["targetID"], 1, int.MaxValue);
-                var timestamp = row.Value<long?>("timestamp") ?? 0;
-
-                if (abilityId == 0)
-                    continue;
-
-                var relative = (timestamp - fight.StartTime) / 1000f;
-                var key = (source, abilityId);
-
-                if (type.Equals("begincast", StringComparison.OrdinalIgnoreCase))
-                {
-                    pending[key] = relative;
-                    results.Add(new LogCast
-                    {
-                        SourceId = source,
-                        TargetId = (int?)target,
-                        AbilityId = abilityId,
-                        TimeSeconds = relative,
-                        IsCastStart = true,
-                        FromEnemy = hostility == "Enemies",
-                    });
-                    continue;
-                }
-
-                if (!type.Equals("cast", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                if (pending.TryGetValue(key, out var began))
-                {
-                    // Fill in the bar length on the begincast we already recorded.
-                    var match = results.LastOrDefault(c =>
-                        c.SourceId == source && c.AbilityId == abilityId && Math.Abs(c.TimeSeconds - began) < 0.01f);
-
-                    if (match != null)
-                    {
-                        var index = results.IndexOf(match);
-                        results[index] = new LogCast
-                        {
-                            SourceId = source,
-                            TargetId = match.TargetId,
-                            AbilityId = abilityId,
-                            TimeSeconds = began,
-                            CastSeconds = MathF.Max(0f, relative - began),
-                            CompletionTimeSeconds = relative,
-                            IsCastStart = true,
-                            FromEnemy = match.FromEnemy,
-                        };
-                    }
-
-                    pending.Remove(key);
-                    continue;
-                }
-
-                // An instant, with no bar in front of it.
-                results.Add(new LogCast
-                {
-                    SourceId = source,
-                    TargetId = (int?)target,
-                    AbilityId = abilityId,
-                    TimeSeconds = relative,
-                    CompletionTimeSeconds = relative,
-                    FromEnemy = hostility == "Enemies",
-                });
-            }
+            cancel.ThrowIfCancellationRequested();
+            parser.Add(rows);
 
             var nextToken = events?["nextPageTimestamp"];
             if (nextToken?.Type == JTokenType.Null)
@@ -357,7 +334,8 @@ public sealed class FfLogsClient : IDisposable
 
         if (!finished)
             throw new FfLogsException("FF Logs cast history reached the page limit. Choose a shorter pull.");
-        return results.OrderBy(c => c.TimeSeconds).ToList();
+        cancel.ThrowIfCancellationRequested();
+        return parser.Finish();
     }
 
     /// <summary>Read optional status and sparse position evidence, bounded to 20 pages / 200,000
@@ -376,7 +354,10 @@ public sealed class FfLogsClient : IDisposable
         for (var page = 0; page < 20; page++)
         {
             cancel.ThrowIfCancellationRequested();
-            var master = page == 0 ? "masterData { abilities { gameID name } }" : string.Empty;
+            var master = page == 0 ? $$"""
+                masterData { abilities { gameID name } actors { id type } }
+                fights(fightIDs: [{{fight.Id}}]) { id startTime endTime friendlyPlayers }
+                """ : string.Empty;
             var query = $$"""
             query {
               reportData {
@@ -410,6 +391,16 @@ public sealed class FfLogsClient : IDisposable
                 break;
             }
             var report = json.SelectToken("data.reportData.report") as JObject;
+            if (page == 0)
+            {
+                var targets = PlayerScope(report, fight);
+                parser = new LogEvidenceParser(fight, names, targets);
+                if (targets == null)
+                {
+                    parser.Result.EffectsComplete = false;
+                    parser.Warn("The selected fight's player list could not be verified. Damage filtering and effect coverage are unverified; status observations remain available.");
+                }
+            }
             if (report?["masterData"] is JObject masterData && masterData["abilities"] is JArray abilities)
             {
                 foreach (var ability in abilities.OfType<JObject>())

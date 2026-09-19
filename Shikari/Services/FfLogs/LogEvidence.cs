@@ -14,6 +14,8 @@ public sealed class LogEvidence
     public List<LogEffectEvent> Effects { get; init; } = new();
     /// <summary>The optional typed-effect channel was read without omissions. Legacy evidence is unknown.</summary>
     public bool EffectsComplete { get; set; }
+    /// <summary>Validated selected-fight player IDs used before the effect cap; null is unscoped legacy evidence.</summary>
+    public IReadOnlyList<int>? EffectTargetActorIds { get; init; }
     public List<string> Warnings { get; init; } = new();
     public bool Complete { get; set; } = true;
 }

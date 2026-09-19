@@ -35,6 +35,8 @@ private sealed class Responses : HttpMessageHandler {
     }
 }
 public static async Task Run() {
+    await CastIdentity();
+    await PlayerEffectScope();
     using (var client = new FfLogsClient(new Responses("""
         {"data":{"reportData":{"report":{"fights":[{"id":30,"name":"Fixture","encounterID":1234,"startTime":10000,"endTime":20000}]}}}}
         """) { RequireEvidenceQuery = false, RequireEncounterIdentity = true })) {
@@ -45,9 +47,9 @@ public static async Task Run() {
     using(var client=new FfLogsClient(new Responses(
         "{\"data\":{\"reportData\":{\"report\":{\"masterData\":{\"actors\":[],\"abilities\":[]}}}}}",
         Page("""
-        [{"timestamp":11000,"type":"begincast","sourceID":1,"abilityGameID":100},
-         {"timestamp":12000,"type":"begincast","sourceID":1,"targetID":2,"abilityGameID":100},
-         {"timestamp":14000,"type":"cast","sourceID":1,"targetID":3,"abilityGameID":100},
+        [{"timestamp":11000,"type":"begincast","sourceID":1,"sourceInstance":1,"abilityGameID":100},
+         {"timestamp":12000,"type":"begincast","sourceID":1,"sourceInstance":2,"targetID":2,"abilityGameID":100},
+         {"timestamp":14000,"type":"cast","sourceID":1,"sourceInstance":2,"targetID":3,"abilityGameID":100},
          {"timestamp":15000,"type":"cast","sourceID":1,"targetID":3,"abilityGameID":200}]
         """), Page("[]")) { RequireEvidenceQuery=false })) {
         var data=await client.GetFightDataAsync("id","secret","code",Fight);
@@ -140,6 +142,106 @@ public static async Task Run() {
     }
     Console.WriteLine($"PASS: {checks} FF Logs evidence checks");
 }
+private static string MetadataPage(string rows, string players = "[1,2]", string actors = "[{\"id\":1,\"type\":\"Player\"},{\"id\":2,\"type\":\"Player\"},{\"id\":99,\"type\":\"NPC\"}]", string next = "null") {
+    var page=JObject.Parse(Page(rows,next)); var report=(JObject)page.SelectToken("data.reportData.report")!;
+    report["fights"]=JArray.Parse("[{\"id\":30,\"startTime\":10000,\"endTime\":20000,\"friendlyPlayers\":"+players+",\"enemyNPCs\":[{\"id\":99,\"instanceCount\":1}]}]");
+    report["masterData"]=new JObject { ["actors"]=JArray.Parse(actors), ["abilities"]=new JArray() }; return page.ToString();
+}
+private static async Task CastIdentity() {
+    async Task<JArray> Read(string rows, string? master=null) {
+        using var client=new FfLogsClient(new Responses(master??MetadataPage("[]"),Page(rows),Page("[]")){RequireEvidenceQuery=false});
+        return JArray.FromObject((await client.GetFightDataAsync("id","secret","code",Fight)).EnemyCasts);
+    }
+    var casts=await Read("""
+    [{"timestamp":11000.25,"type":"begincast","sourceID":99,"sourceInstance":1,"targetID":1,"targetInstance":1,"abilityGameID":100},
+     {"timestamp":12000,"type":"begincast","sourceID":99,"sourceInstance":2,"targetID":2,"abilityGameID":100},
+     {"timestamp":14000.75,"type":"cast","sourceID":99,"sourceInstance":1,"targetID":2,"targetInstance":1,"abilityGameID":100},
+     {"timestamp":15000,"type":"cast","sourceID":99,"sourceInstance":2,"abilityGameID":100}]
+    """);
+    Check(casts.Count==2 && casts[0].Value<float>("CastSeconds")==3.0005f && casts[1].Value<float>("CastSeconds")==3,
+        "Overlapping NPC instances must complete their own exact start, preserving fractional timestamps.");
+    Check(casts[0].Value<int?>("SourceInstance")==1 && casts[1].Value<int?>("SourceInstance")==2 &&
+        casts[0].Value<int?>("TargetId")==1 && casts[0].Value<int?>("CompletionTargetId")==2 &&
+        casts[0].Value<int?>("CompletionTargetInstance")==1 && casts[1]["CompletionTargetId"]?.Type==JTokenType.Null,
+        "Start and completion identities remain distinct, including absent completion targets.");
+    casts=await Read("""
+    [{"timestamp":11000,"type":"begincast","sourceID":99,"sourceInstance":1,"abilityGameID":100},
+     {"timestamp":12000,"type":"begincast","sourceID":99,"sourceInstance":1,"abilityGameID":100},
+     {"timestamp":14000,"type":"cast","sourceID":99,"sourceInstance":1,"abilityGameID":100},
+     {"timestamp":15000,"type":"cast","sourceID":99,"sourceInstance":1,"abilityGameID":100}]
+    """);
+    Check(casts.Count==4 && casts.Take(2).All(c=>c["CompletionTimeSeconds"]?.Type==JTokenType.Null),
+        "Ambiguous overlapping starts cannot be assigned a guessed completion, including a later second completion.");
+    casts = await Read("""
+    [{"timestamp":11000,"type":"begincast","sourceID":99,"sourceInstance":1,"abilityGameID":100},
+     {"timestamp":12000,"type":"begincast","sourceID":99,"sourceInstance":1,"abilityGameID":100},
+     {"timestamp":14000,"type":"cast","sourceID":99,"sourceInstance":1,"abilityGameID":100},
+     {"timestamp":15000,"type":"begincast","sourceID":99,"sourceInstance":1,"abilityGameID":100},
+     {"timestamp":16000,"type":"cast","sourceID":99,"sourceInstance":1,"abilityGameID":100}]
+    """);
+    Check(casts.Count == 5 && casts.Where(c => c.Value<bool>("IsCastStart")).All(c => c["CompletionTimeSeconds"]?.Type == JTokenType.Null),
+        "Ambiguous older starts cannot be forgotten to justify pairing a later completion to a new start.");
+    const string absent="[{\"timestamp\":11000,\"type\":\"begincast\",\"sourceID\":99,\"abilityGameID\":100},{\"timestamp\":14000,\"type\":\"cast\",\"sourceID\":99,\"abilityGameID\":100}]";
+    casts=await Read(absent,Page("[]"));
+    Check(casts.Count==2 && casts[0]["CompletionTimeSeconds"]?.Type==JTokenType.Null,
+        "Unknown NPC instance without independent single-instance metadata cannot be paired.");
+    casts=await Read(absent);
+    Check(casts.Count==1 && casts[0].Value<float>("CastSeconds")==3 && casts[0]["SourceInstance"]?.Type==JTokenType.Null,
+        "Independent single-instance fight metadata permits pairing without inventing an instance number.");
+    foreach(var invalid in new[]{"\"1\"","0","-1","1.5","2147483648"}) {
+        var failed=false;
+        try { await Read("[{\"timestamp\":11000,\"type\":\"begincast\",\"sourceID\":99,\"sourceInstance\":"+invalid+",\"abilityGameID\":100}]"); }
+        catch(FfLogsException){failed=true;}
+        Check(failed,"Malformed cast identity must not masquerade as missing identity or complete cast history.");
+    }
+    var oversizedTarget = false;
+    try { await Read("[{\"timestamp\":11000,\"type\":\"cast\",\"sourceID\":99,\"targetID\":999999999999999999999999999999,\"abilityGameID\":100}]"); }
+    catch(FfLogsException) { oversizedTarget = true; }
+    Check(oversizedTarget, "Oversized target IDs must report a malformed import rather than escape as numeric conversion errors.");
+    // The independent actor metadata must lose precedence when observations prove several instances exist.
+    casts = await Read("""
+    [{"timestamp":11000,"type":"begincast","sourceID":99,"sourceInstance":1,"abilityGameID":100},
+     {"timestamp":12000,"type":"cast","sourceID":99,"abilityGameID":100},
+     {"timestamp":15000,"type":"cast","sourceID":99,"sourceInstance":2,"abilityGameID":200}]
+    """);
+    Check(casts.Count == 3 && casts[0]["CompletionTimeSeconds"]?.Type == JTokenType.Null,
+        "A later observed second NPC instance invalidates pairing based on contradictory single-instance metadata.");
+}
+private static async Task PlayerEffectScope() {
+    var outgoing=new JObject { ["timestamp"]=11000,["type"]="damage",["sourceID"]=1,["targetID"]=99,["abilityGameID"]=50 };
+    var rows=new JArray(Enumerable.Range(0,32769).Select(_=>outgoing.DeepClone()));
+    rows.Add(new JObject { ["timestamp"]=15000,["type"]="calculateddamage",["sourceID"]=99,["targetID"]=2,["abilityGameID"]=100 });
+    var responses=new Responses(MetadataPage(rows.ToString()));
+    using(var client=new FfLogsClient(responses)) {
+        var result=await client.GetEvidenceAsync("id","secret","code",Fight);
+        Check(result.Effects.Count==1 && result.Effects[0].TargetId==2 && result.EffectsComplete,
+            "Acquisition must establish player scope before outgoing damage consumes the effect cap.");
+        Check(responses.Queries.Single().Contains("friendlyPlayers") && responses.Queries.Single().Contains("actors"),
+            "Player scope must come from selected-fight metadata and report actor types, not damage targets.");
+    }
+    foreach(var mutate in new Action<JObject>[] {
+        p=>((JObject)p.SelectToken("data.reportData.report")!).Remove("fights"),
+        p=>p.SelectToken("data.reportData.report.fights[0]")!["id"]=31,
+        p=>p.SelectToken("data.reportData.report.fights[0]")!["startTime"]=9999,
+        p=>p.SelectToken("data.reportData.report.fights[0]")!["friendlyPlayers"]=new JArray(1,1),
+        p=>p.SelectToken("data.reportData.report.fights[0]")!["friendlyPlayers"]=new JArray(1,99),
+        p=>p.SelectToken("data.reportData.report.fights[0]")!["friendlyPlayers"]=new JArray(1,88),
+        p=>p.SelectToken("data.reportData.report.masterData")!["actors"]=new JArray(),
+        p=>p.SelectToken("data.reportData.report")!["masterData"]=42,
+        p=>p.SelectToken("data.reportData.report")!["masterData"]=JValue.CreateNull(),
+        p=>p.SelectToken("data.reportData.report")!["masterData"]=new JArray()
+    }) {
+        var page=JObject.Parse(MetadataPage("[{\"timestamp\":12000,\"type\":\"applydebuff\",\"targetID\":1,\"abilityGameID\":1000010}]")); mutate(page);
+        using var client=new FfLogsClient(new Responses(page.ToString()));
+        var result=await client.GetEvidenceAsync("id","secret","code",Fight);
+        Check(result.Complete && result.StatusEvents.Count == 1 && !result.EffectsComplete && result.Warnings.Any(w=>w.Contains("player",StringComparison.OrdinalIgnoreCase)),
+            "Unverified player scope must be disclosed without throwing away independent status evidence.");
+    }
+    using(var client=new FfLogsClient(new Responses(MetadataPage("[]","[]","[]")))) {
+        var result=await client.GetEvidenceAsync("id","secret","code",Fight);
+        Check(result.EffectsComplete && result.Effects.Count==0,"An authoritative empty fight roster is distinct from missing metadata.");
+    }
+}
 private static async Task CastPagination() {
     const string master="{\"data\":{\"reportData\":{\"report\":{\"masterData\":{\"actors\":[],\"abilities\":[]}}}}}";
     var missingCursor=Page("[]").Replace(",\"nextPageTimestamp\":null", "");
@@ -159,8 +261,8 @@ private static async Task CastPagination() {
         Check(rejected, fixture.Item1+" must reject the import instead of returning apparently complete cast occurrences");
     }
     var pages=new Responses(master,
-        Page("[{\"timestamp\":11000,\"type\":\"begincast\",\"sourceID\":1,\"abilityGameID\":100}]", "12000.5"),
-        Page("[{\"timestamp\":14000,\"type\":\"cast\",\"sourceID\":1,\"abilityGameID\":100}]"), Page("[]")) { RequireEvidenceQuery=false };
+        Page("[{\"timestamp\":11000,\"type\":\"begincast\",\"sourceID\":1,\"sourceInstance\":1,\"abilityGameID\":100}]", "12000.5"),
+        Page("[{\"timestamp\":14000,\"type\":\"cast\",\"sourceID\":1,\"sourceInstance\":1,\"abilityGameID\":100}]"), Page("[]")) { RequireEvidenceQuery=false };
     using(var client=new FfLogsClient(pages)) {
         var data=await client.GetFightDataAsync("id","secret","code",Fight);
         Check(data.EnemyCasts.Single().CastSeconds==3, "Cast pairing survives pagination");

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Threading;
@@ -32,7 +33,9 @@ namespace Shikari.Tests
                 "Snapshot and delayed damage positions must remain attached to their own timestamps");
             ParserIdentityAndMissingValues();
             ParserMalformedDataAndBounds();
+            ScopedEffectTargets();
             BuilderAndSerialization();
+            ScopedReplay();
             Validation();
             Console.WriteLine("PASS: typed damage identity, source instances, snapshot positions, channel bounds, replay import and backward serialization");
         }
@@ -112,6 +115,64 @@ namespace Shikari.Tests
             Check(!parser.Result.EffectsComplete, "An unreadable event timestamp cannot establish effect completeness");
         }
 
+        private static LogEvidenceParser ScopedParser(IReadOnlySet<int>? targets)
+        {
+            var constructor = typeof(LogEvidenceParser).GetConstructor(new[] { typeof(LogFight),
+                typeof(IReadOnlyDictionary<uint, string>), typeof(IReadOnlySet<int>) });
+            return constructor == null ? new LogEvidenceParser(Fight()) :
+                (LogEvidenceParser)constructor.Invoke(new object?[] { Fight(), null, targets });
+        }
+
+        private static void ScopedEffectTargets()
+        {
+            var targets = new HashSet<int> { 2, 1 };
+            var parser = ScopedParser(targets);
+            targets.Clear(); targets.Add(99);
+            parser.AddPage(new JArray(Enumerable.Range(0, ReplayEvidence.MaxEffects + 5).Select(i => Effect(target: i % 2 == 0 ? 99 : 500, source: 1))));
+            var outgoing = Effect(target: 99, source: 1);
+            outgoing["sourceResources"] = new JObject { ["x"] = 0, ["y"] = 42 };
+            outgoing["abilityGameID"] = "bad ability"; outgoing["packetID"] = -1; outgoing["sourceInstance"] = 0;
+            outgoing["targetResources"] = new JObject { ["x"] = "not a coordinate" };
+            var untimed = (JObject)outgoing.DeepClone(); untimed["timestamp"] = "unknown";
+            parser.AddPage(new JArray(outgoing, untimed, Effect(target: 1), Effect(target: 2)));
+            Check(parser.Result.Effects.Count == 2 && parser.Result.Effects.All(e => e.TargetId is 1 or 2) &&
+                parser.Result.EffectsComplete && parser.Result.Complete,
+                "Outgoing, pet and NPC-target damage must not exhaust the player-target cap or poison scoped completeness.");
+            Check(parser.Result.Positions.Any(p => p.ActorId == 1 && p.X == 0 && p.Y == 42),
+                "Ignoring outgoing effects must preserve their useful player position resources.");
+            Check(parser.Result.Warnings.Count == 1 && parser.Result.Warnings[0].Contains("position", StringComparison.OrdinalIgnoreCase),
+                "Untimed irrelevant damage must explain omitted positions without failing the independent player-effect channel.");
+            var provenance = JObject.FromObject(parser.Result)["EffectTargetActorIds"] as JArray;
+            Check(provenance != null && provenance.Select(t => t.Value<int>()).SequenceEqual(new[] { 1, 2 }),
+                "The authoritative target scope must survive as a detached, deterministic evidence snapshot.");
+
+            parser = ScopedParser(new HashSet<int> { 1 });
+            parser.AddPage(new JArray(Enumerable.Range(0, ReplayEvidence.MaxEffects).Select(_ => Effect())));
+            parser.AddPage(new JArray(Effect(target: 99)));
+            Check(parser.Result.EffectsComplete, "An irrelevant event after the exact cap does not imply relevant observations were omitted.");
+            parser.AddPage(new JArray(Effect()));
+            Check(!parser.Result.EffectsComplete && parser.Result.Complete && parser.Result.Effects.Count == ReplayEvidence.MaxEffects,
+                "Relevant overflow remains bounded and partial without damaging status completeness.");
+
+            foreach (var invalid in new JToken[] { 0, -1, 1.5, "99", JValue.CreateNull(), (long)int.MaxValue + 1 })
+            {
+                parser = ScopedParser(new HashSet<int> { 1 });
+                var row = Effect(); row["targetID"] = invalid; parser.AddPage(new JArray(row));
+                Check(parser.Result.Effects.Count == 0 && !parser.Result.EffectsComplete,
+                    "An invalid target cannot be silently classified outside the authoritative player scope.");
+            }
+            parser = ScopedParser(new HashSet<int>());
+            parser.AddPage(new JArray(Effect(), Effect(target: 99)));
+            Check(parser.Result.Effects.Count == 0 && parser.Result.EffectsComplete &&
+                JObject.FromObject(parser.Result)["EffectTargetActorIds"] is JArray { Count: 0 },
+                "An authoritative empty target set must capture no effects and never infer players from damage.");
+            var missing = Effect(); missing.Remove("targetID"); parser.AddPage(new JArray(missing));
+            Check(!parser.Result.EffectsComplete, "Missing target identity remains an unresolved omission even with an empty scope.");
+            parser = ScopedParser(null); parser.AddPage(new JArray(Effect(target: 99)));
+            Check(parser.Result.Effects.Count == 1 && JObject.FromObject(parser.Result)["EffectTargetActorIds"]?.Type is null or JTokenType.Null,
+                "A null scope preserves the legacy unfiltered parser and must not claim authoritative target provenance.");
+        }
+
         private static void BuilderAndSerialization()
         {
             var plan = PlanDocument.CreateDefault();
@@ -150,6 +211,31 @@ namespace Shikari.Tests
             attempt = LogReplayBuilder.Build(plan, Data(), oversized, _ => true, _ => 0);
             Check(attempt.Evidence.Effects.Count == ReplayEvidence.MaxEffects && !attempt.Evidence.EffectsComplete && attempt.Evidence.Complete,
                 "Replay builder independently bounds manually supplied effects without spoiling status completeness");
+        }
+
+        private static void ScopedReplay()
+        {
+            var parser = ScopedParser(new HashSet<int> { 1, 2 });
+            parser.AddPage(new JArray(Effect(target: 2)));
+            var plan = PlanDocument.CreateDefault();
+            var attempt = LogReplayBuilder.Build(plan, Data(), parser.Result, _ => true, _ => 0);
+            Check(attempt.Evidence.Actors.Count == 2 && attempt.Evidence.Effects.Count == 1 && attempt.Evidence.EffectsComplete,
+                "Verified fight participants include damage-only players without relying on their outgoing casts or positions.");
+            var restored = JsonConvert.DeserializeObject<ReplayAttempt>(JsonConvert.SerializeObject(attempt, PlanJson.Compact()), PlanJson.Compact())!;
+            Check(ReplayValidation.IsValid(restored) && JObject.FromObject(restored.Evidence)["EffectTargetActorIds"] is JArray { Count: 2 },
+                "Player-target scope must survive compact replay storage.");
+            var data = Data(); data.Actors[1] = new LogActor { Id = 2, Type = "NPC" };
+            var partial = LogReplayBuilder.Build(plan, data, parser.Result, _ => true, _ => 0);
+            Check(!partial.Evidence.EffectsComplete && partial.Evidence.Effects.Count == 0 && partial.Evidence.Actors.Count == 1,
+                "Conflicting actor metadata cannot silently remove a scoped target while claiming complete effects.");
+            data = Data(); data.Actors.Add(data.Actors[1]);
+            partial = LogReplayBuilder.Build(plan, data, parser.Result, _ => true, _ => 0);
+            Check(!partial.Evidence.EffectsComplete && ReplayValidation.IsValid(partial), "Duplicate actor metadata must remain partial and loadable.");
+            foreach (var scope in new[] { new[] { 0 }, new[] { 1, 1 }, new[] { 99 } })
+            {
+                var json = JObject.FromObject(attempt); json["Evidence"]!["EffectTargetActorIds"] = new JArray(scope);
+                Check(!ReplayValidation.IsValid(json.ToObject<ReplayAttempt>()!), "Malformed or inconsistent stored scope is rejected.");
+            }
         }
 
         private static void Validation()

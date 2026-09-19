@@ -60,4 +60,4 @@ Reproduce the measurements with `tests/pull-snapshots.ps1` and `tests/replay-lib
 - Strategy revision fingerprints, detached graph capture and per-recording coverage indexing still have owner-thread costs. The coverage scheduling budget is not a guaranteed frame-time ceiling.
 - Prove the full reviewed M12S Caro import-to-personal-cue workflow with independent arena landmarks and additional pulls. Storage improvements do not establish mechanic correctness on unseen data.
 
-The next intelligence work remains cast source-instance/completion-target identity, player-target filtering before the FF Logs effect cap, and a reviewed encounter workflow that records the cues actually delivered during a pull.
+Cast source-instance/completion-target identity and player-target filtering before the FF Logs effect cap are covered by the [September 19 follow-up](2026-09-19-cast-effect-identity.md). The next intelligence work is a reviewed encounter workflow that records the cues actually delivered during a pull.

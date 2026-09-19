@@ -22,6 +22,13 @@ public sealed class RecordedCast
     /// <summary>Live game object ID, or FF Logs report actor ID according to Source.</summary>
     public ulong? CasterId { get; set; }
     public ulong? TargetId { get; set; }
+    /// <summary>Optional FF Logs instances; absent identity stays unknown.</summary>
+    public int? CasterInstance { get; set; }
+    public int? TargetInstance { get; set; }
+    /// <summary>Identity supplied by the completion event, independent of the start target.</summary>
+    public int? CompletionCasterInstance { get; set; }
+    public ulong? CompletionTargetId { get; set; }
+    public int? CompletionTargetInstance { get; set; }
     /// <summary>Live world XYZ in yalms at ObservedTime. Log centicoordinates are not world coordinates.</summary>
     public Vector3? CasterWorldPosition { get; set; }
     public Vector3? TargetWorldPosition { get; set; }
@@ -66,6 +73,14 @@ public sealed class RecordedCast
         ValidTime(ExpectedEndTime, ReplayBuffer.MaxDuration * 2) &&
         !(ObservedTime < StartTime) && !(CompletionTime < StartTime) && !(ExpectedEndTime < StartTime) &&
         CasterId != 0 && TargetId != 0 &&
+        CompletionTargetId != 0 &&
+        (CasterInstance == null || CasterInstance > 0 && CasterId != null) &&
+        (TargetInstance == null || TargetInstance > 0 && TargetId != null) &&
+        (CompletionCasterInstance == null || CompletionCasterInstance > 0 && CasterId != null && CompletionTime != null) &&
+        (CompletionTargetInstance == null || CompletionTargetInstance > 0 && CompletionTargetId != null) &&
+        (CompletionTargetId == null || CompletionTime != null) &&
+        (Source == "FF Logs" || CasterInstance == null && TargetInstance == null && CompletionCasterInstance == null &&
+            CompletionTargetId == null && CompletionTargetInstance == null) &&
         (CasterWorldPosition == null || FinitePosition(CasterWorldPosition) != null) &&
         (TargetWorldPosition == null || FinitePosition(TargetWorldPosition) != null) &&
         (CasterHeading == null || float.IsFinite(CasterHeading.Value)) &&

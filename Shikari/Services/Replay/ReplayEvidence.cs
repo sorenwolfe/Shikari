@@ -24,6 +24,8 @@ public sealed class ReplayEvidence
     public List<EvidenceEffect> Effects { get; set; } = new();
     /// <summary>Optional effect-channel completeness, independent of status evidence. False for older recordings.</summary>
     public bool EffectsComplete { get; set; }
+    /// <summary>Validated selected-fight player scope; null for older/unscoped recordings.</summary>
+    public List<int>? EffectTargetActorIds { get; set; }
     public List<EvidenceReference> References { get; set; } = new();
     public string CalibrationSlideId { get; set; } = "";
 }

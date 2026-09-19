@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Numerics;
 using System.Threading;
 using Newtonsoft.Json.Linq;
@@ -13,13 +14,19 @@ public sealed class LogEvidenceParser
     private const int MaxEffects = 32768;
     private readonly LogFight fight;
     private readonly IReadOnlyDictionary<uint, string> abilityNames;
+    private readonly HashSet<int>? playerTargets;
     private readonly HashSet<(float Time, int Actor, float X, float Y)> positions = new();
-    public LogEvidence Result { get; } = new() { EffectsComplete = true };
+    public LogEvidence Result { get; }
 
-    public LogEvidenceParser(LogFight fight, IReadOnlyDictionary<uint, string>? abilityNames = null)
+    public LogEvidenceParser(LogFight fight, IReadOnlyDictionary<uint, string>? abilityNames = null,
+        IReadOnlySet<int>? playerTargetIds = null)
     {
         this.fight = fight;
         this.abilityNames = abilityNames ?? new Dictionary<uint, string>();
+        if (playerTargetIds?.Any(id => id <= 0) == true) throw new ArgumentException("Invalid player target identity.", nameof(playerTargetIds));
+        playerTargets = playerTargetIds == null ? null : new HashSet<int>(playerTargetIds);
+        Result = new LogEvidence { EffectsComplete = true,
+            EffectTargetActorIds = playerTargets == null ? null : Array.AsReadOnly(playerTargets.OrderBy(id => id).ToArray()) };
     }
 
     public void Warn(string warning, bool incomplete = false)
@@ -33,9 +40,15 @@ public sealed class LogEvidenceParser
         foreach (var token in rows)
         {
             cancel.ThrowIfCancellationRequested();
+            var effectRow = token as JObject;
+            var eventType = effectRow?["type"]?.Type == JTokenType.String ? effectRow.Value<string>("type") : null;
+            var effectTarget = ExactInteger(effectRow?["targetID"], 1, int.MaxValue);
+            var irrelevantEffect = eventType is "calculateddamage" or "damage" && playerTargets != null &&
+                effectTarget.HasValue && !playerTargets.Contains((int)effectTarget.Value);
             if (token is not JObject row || !Number(row["timestamp"], out var timestamp))
             {
-                Warn("Some events had invalid timestamps and were omitted.", true);
+                if (irrelevantEffect) Warn("Some outgoing damage positions had invalid timestamps and were omitted.");
+                else Warn("Some events had invalid timestamps and were omitted.", true);
                 continue;
             }
             if (timestamp < fight.StartTime || timestamp > fight.EndTime) continue;
@@ -43,7 +56,7 @@ public sealed class LogEvidenceParser
             AddPosition(row, "source", time);
             AddPosition(row, "target", time);
             var type = row["type"]?.Type == JTokenType.String ? row.Value<string>("type") : null;
-            if (type is "calculateddamage" or "damage") AddEffect(row, time, type);
+            if (type is "calculateddamage" or "damage" && !irrelevantEffect) AddEffect(row, time, type);
             if (type == "combatantinfo")
             {
                 var actor = Integer(row["sourceID"], 1, int.MaxValue);
@@ -67,6 +80,12 @@ public sealed class LogEvidenceParser
 
     private void AddEffect(JObject row, float time, string type)
     {
+        var target = ExactInteger(row["targetID"], 1, int.MaxValue);
+        if (target == null)
+        {
+            EffectWarning("Some typed damage observations had invalid target IDs and could not be scoped to players.");
+            return;
+        }
         if (Result.Effects.Count >= MaxEffects)
         {
             EffectWarning("Typed damage observations exceeded the recording limit; the effect channel is incomplete.");
@@ -74,7 +93,6 @@ public sealed class LogEvidenceParser
         }
         var action = ExactInteger(row["abilityGameID"], 1, uint.MaxValue);
         var source = ExactInteger(row["sourceID"], 1, long.MaxValue);
-        var target = ExactInteger(row["targetID"], 1, long.MaxValue);
         if (action == null || source == null || target == null)
         {
             EffectWarning("Some typed damage observations had invalid ability or actor IDs and were omitted.");

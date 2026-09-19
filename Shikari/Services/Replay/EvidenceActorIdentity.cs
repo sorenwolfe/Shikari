@@ -27,7 +27,7 @@ public static class EvidenceActorIdentity
     /// The cast must be an item in attempt.Casts; IDs from another pull or report are never searched.
     /// The returned Id is the key used by EvidenceTimeline, not a game object ID.
     /// </summary>
-    public static EvidenceActor? Resolve(ReplayAttempt? attempt, RecordedCast? cast, bool target = false)
+    public static EvidenceActor? Resolve(ReplayAttempt? attempt, RecordedCast? cast, bool target = false, bool completion = false)
     {
         if (attempt?.Casts == null || cast == null || attempt.Casts.Count > ReplayBuffer.MaxCasts ||
             !attempt.Casts.Contains(cast) || attempt.Evidence?.Actors == null || attempt.Evidence.Actors.Count > 32)
@@ -35,7 +35,8 @@ public static class EvidenceActorIdentity
         var evidence = attempt.Evidence;
         var live = cast.Source == "Live" && evidence.Source == "Local recording";
         var logs = cast.Source == "FF Logs" && evidence.Source == "FF Logs";
-        var id = target ? cast.TargetId : cast.CasterId;
+        if (completion && (!logs || !target || cast.CompletionTime == null)) return null;
+        var id = completion ? cast.CompletionTargetId : target ? cast.TargetId : cast.CasterId;
         if ((!live && !logs) || id == null || (live ? !IsLiveGameObjectId(id) : id is 0 or > long.MaxValue))
             return null;
 

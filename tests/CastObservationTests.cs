@@ -139,7 +139,7 @@ namespace Shikari.Tests
             var data = new LogFightData { Fight = new LogFight { Id = 1, EndTime = 10000 } };
             data.EnemyCasts.Add(new LogCast { SourceId = 7, AbilityId = 100, IsCastStart = true, TimeSeconds = 1 });
             data.EnemyCasts.Add(JsonConvert.DeserializeObject<LogCast>("""
-                {"SourceId":7,"TargetId":9,"AbilityId":100,"IsCastStart":true,"TimeSeconds":2,"CastSeconds":3,"CompletionTimeSeconds":5}
+                {"SourceId":7,"SourceInstance":2,"TargetId":9,"TargetInstance":1,"CompletionSourceInstance":2,"CompletionTargetId":10,"CompletionTargetInstance":1,"AbilityId":100,"IsCastStart":true,"TimeSeconds":2,"CastSeconds":3,"CompletionTimeSeconds":5}
                 """)!);
             data.EnemyCasts.Add(JsonConvert.DeserializeObject<LogCast>("""
                 {"SourceId":7,"TargetId":9,"AbilityId":200,"TimeSeconds":6,"CompletionTimeSeconds":6}
@@ -154,6 +154,22 @@ namespace Shikari.Tests
                 "Explicit log completion stays separate from bar prediction");
             Check(instant.StartTime == null && instant.CompletionTime == 6 && instant.Occurrence == null,
                 "Completion-only events do not invent a cast start or bar occurrence");
+            var stored = JObject.FromObject(paired);
+            Check(stored.Value<int?>("CasterInstance") == 2 && stored.Value<int?>("TargetInstance") == 1 &&
+                stored.Value<int?>("CompletionCasterInstance") == 2 && stored.Value<int?>("CompletionTargetId") == 10 &&
+                stored.Value<int?>("CompletionTargetInstance") == 1, "Replay preserves independent cast-start and completion identities.");
+            var restored = JsonConvert.DeserializeObject<RecordedCast>(JsonConvert.SerializeObject(paired, PlanJson.Compact()), PlanJson.Compact())!;
+            Check(restored.IsValid(10) && JObject.FromObject(restored).Value<int?>("CompletionTargetId") == 10,
+                "Independent completion identity survives compact serialization.");
+            foreach (var change in new Action<JObject>[] {
+                c => c["CasterInstance"] = 0, c => c["TargetInstance"] = -1,
+                c => c["CompletionCasterInstance"] = 0, c => c["CompletionTargetInstance"] = 0,
+                c => c["CompletionTargetId"] = 0, c => c["TargetId"] = null,
+                c => c["CasterId"] = null, c => c["CompletionTargetId"] = null, c => c["CompletionTime"] = null })
+            {
+                var corrupt = (JObject)stored.DeepClone(); change(corrupt);
+                Check(!corrupt.ToObject<RecordedCast>()!.IsValid(10), "Invalid or orphaned cast instances/completion targets are rejected.");
+            }
             Check(attempt.Casts.All(c => c.CasterWorldPosition == null && c.TargetWorldPosition == null && c.CasterHeading == null &&
                 c.TargetHeading == null && c.StartedAtUtc == null && c.ObservedAtUtc == null), "Logs do not invent world geometry or absolute event times");
             Check(ReplayValidation.IsValid(attempt), "Both live and log records use the same validated replay representation");

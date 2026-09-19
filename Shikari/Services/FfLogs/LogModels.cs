@@ -37,8 +37,13 @@ public sealed class LogActor
 public sealed class LogCast
 {
     public int SourceId { get; init; }
+    public int? SourceInstance { get; init; }
     /// <summary>Target actor on the begincast, or cast event when no start was observed.</summary>
     public int? TargetId { get; init; }
+    public int? TargetInstance { get; init; }
+    public int? CompletionSourceInstance { get; init; }
+    public int? CompletionTargetId { get; init; }
+    public int? CompletionTargetInstance { get; init; }
     public uint AbilityId { get; init; }
     public string AbilityName { get; set; } = string.Empty;
     public float TimeSeconds { get; init; }
